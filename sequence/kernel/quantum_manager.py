@@ -25,7 +25,7 @@ from scipy.special import binom
 
 from .quantum_state import KetState, DensityState, BellDiagonalState
 from .quantum_utils import *
-from ..constants import KET_STATE_FORMALISM, DENSITY_MATRIX_FORMALISM, FOCK_DENSITY_MATRIX_FORMALISM, BELL_DIAGONAL_STATE_FORMALISM
+from ..constants import KET_STATE_FORMALISM, DENSITY_MATRIX_FORMALISM, FOCK_DENSITY_MATRIX_FORMALISM, BELL_DIAGONAL_STATE_FORMALISM, STABILIZER_FORMALISM
 
 
 class QuantumManager(ABC):
@@ -827,3 +827,9 @@ class QuantumManagerBellDiagonal(QuantumManager):
 
     def run_circuit(self, *args, **kwargs):
         pass
+
+
+@QuantumManager.register(STABILIZER_FORMALISM)
+class QuantumManagerStabilizer(QuantumManager):
+    pass
+
