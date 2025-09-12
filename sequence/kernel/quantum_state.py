@@ -12,7 +12,9 @@ import math
 from abc import ABC
 from numpy import pi, cos, sin, arange, log, log2
 from numpy.random import Generator
-
+import numpy as np
+import itertools
+import stim
 from .quantum_utils import *
 from ..constants import EPSILON
 
@@ -409,3 +411,179 @@ class BellDiagonalState(State):
         # note: density matrix diagonal elements are guaranteed to be real from Hermiticity
         self.state = array(diag_elems, dtype=float)
         self.keys = keys
+
+class StabilizerState(State):
+    """
+    Stabilizer state with density matrix representation via Pauli tomography.
+    Uses compiled samplers for efficiency and maintains a tableau for exact operations.
+    """
+
+    def __init__(self, keys: list[int], circuit: stim.Circuit = None, 
+                 shots: int = 8192, truncation: int = 1):
+        """
+        Initialize stabilizer state with density matrix representation.
+        
+        Args:
+            keys: List of quantum manager keys (typically 1-2)
+            circuit: Stim circuit to prepare the state (None = |0...0⟩)
+            shots: Number of samples for Pauli tomography
+            truncation: Dormant variable for future compatibility
+        """
+        super().__init__()
+        self.keys = list(keys)
+        self.circuit = circuit if circuit is not None else stim.Circuit()
+        self.shots = int(shots)
+        self.truncation = truncation  # Dormant for now
+        
+        # Lazy-initialized tableau
+        self._tableau = None
+        
+        # Compute density matrix immediately
+        self.state = self._compute_density_matrix()
+    
+    @property
+    def tableau(self) -> stim.Tableau:
+        """Get tableau representation, computing it lazily if needed."""
+        if self._tableau is None:
+            if self.circuit and len(self.circuit) > 0:
+                # Create tableau directly from circuit
+                self._tableau = stim.Tableau.from_circuit(self.circuit)
+            else:
+                # For empty circuit, create identity tableau
+                num_qubits = max(self.keys) + 1 if self.keys else 1
+                self._tableau = stim.Tableau(num_qubits)
+                
+        return self._tableau
+    
+    def serialize(self) -> dict:
+        """Not supported for StabilizerState."""
+        raise NotImplementedError(
+            "StabilizerState cannot use the base complex-vector serialization. "
+            "Persist with a custom stabilizer/circuit schema instead.")
+        
+    def deserialize(self) -> None:
+        """Not supported for StabilizerState."""
+        raise NotImplementedError(
+            "StabilizerState cannot be deserialized from the base complex-vector format. "
+            "Load from a custom stabilizer/circuit schema instead.")
+        
+    def set(self, circuit: stim.Circuit, sampled_keys: list[int] = None):
+        """
+        Set state from a circuit by sampling specific qubits.
+        
+        Args:
+            circuit: Stim circuit that prepares the full state
+            sampled_keys: Which qubits to include in density matrix (None = use self.keys)
+        """
+        self.circuit = circuit
+        if sampled_keys is not None:
+            self.keys = sampled_keys
+        
+        # Invalidate cached tableau
+        self._tableau = None
+        
+        self.state = self._compute_density_matrix()
+    
+    def _compute_density_matrix(self) -> np.ndarray:
+        """Compute density matrix via Pauli tomography using compiled samplers."""
+        k = len(self.keys)
+        
+        # Pauli operators
+        I = np.array([[1, 0], [0, 1]], dtype=complex)
+        X = np.array([[0, 1], [1, 0]], dtype=complex)
+        Y = np.array([[0, -1j], [1j, 0]], dtype=complex)
+        Z = np.array([[1, 0], [0, -1]], dtype=complex)
+        paulis = {'I': I, 'X': X, 'Y': Y, 'Z': Z}
+        
+        # Build density matrix via Pauli expansion
+        rho = np.zeros((2**k, 2**k), dtype=complex)
+        
+        for pauli_string in itertools.product('IXYZ', repeat=k):
+            # Build measurement circuit for this Pauli string
+            meas_circuit = self.circuit.copy()
+            
+            # Add basis rotations and measurements
+            measured_qubits = []
+            for i, (qubit, pauli) in enumerate(zip(self.keys, pauli_string)):
+                if pauli == 'I':
+                    continue  # Don't measure identity
+                elif pauli == 'X':
+                    meas_circuit.append("H", [qubit])
+                elif pauli == 'Y':
+                    meas_circuit.append("S_DAG", [qubit])
+                    meas_circuit.append("H", [qubit])
+                # Z needs no rotation
+                
+                meas_circuit.append("M", [qubit])
+                measured_qubits.append(i)
+            
+            # Estimate expectation value
+            if not measured_qubits:
+                expectation = 1.0  # All identity operators
+            else:
+                # Compile and sample
+                sampler = meas_circuit.compile_sampler()
+                samples = sampler.sample(shots=self.shots)
+                
+                # Calculate expectation as average parity
+                if samples.shape[1] == 0:
+                    expectation = 1.0
+                else:
+                    # Parity: even number of 1s -> +1, odd -> -1
+                    parities = np.array([(-1) ** np.sum(row) for row in samples])
+                    expectation = np.mean(parities)
+            
+            # Build tensor product of Pauli matrices
+            pauli_op = np.array([[1]], dtype=complex)
+            for p in pauli_string:
+                pauli_op = np.kron(pauli_op, paulis[p])
+            
+            rho += expectation * pauli_op
+        
+        rho /= (2**k)
+        return rho
+    
+    def measure(self, qubit_indices: list[int], basis: str = 'Z') -> list[int]:
+        """
+        Sample measurements without modifying the state.
+        
+        Args:
+            qubit_indices: Indices within self.keys to measure
+            basis: Measurement basis ('Z', 'X', or 'Y')
+        
+        Returns:
+            List of measurement outcomes (0 or 1)
+        """
+        meas_circuit = self.circuit.copy()
+        
+        for idx in qubit_indices:
+            if idx >= len(self.keys):
+                continue
+            qubit = self.keys[idx]
+            
+            if basis == 'X':
+                meas_circuit.append("H", [qubit])
+            elif basis == 'Y':
+                meas_circuit.append("S_DAG", [qubit])
+                meas_circuit.append("H", [qubit])
+            
+            meas_circuit.append("M", [qubit])
+        
+        sampler = meas_circuit.compile_sampler()
+        sample = sampler.sample(shots=1)[0]
+        
+        # Extract results for requested qubits
+        return [int(sample[i]) if i < len(sample) else 0 for i in range(len(qubit_indices))]
+    
+    def copy(self):
+        """Create a copy of this state."""
+        new_state = StabilizerState(
+            keys=self.keys.copy(),
+            circuit=self.circuit.copy(),
+            shots=self.shots,
+            truncation=self.truncation
+        )
+        new_state.state = self.state.copy()
+        # Don't copy the tableau - let it be recomputed if needed
+        new_state._tableau = None
+        return new_state

@@ -461,3 +461,118 @@ def verify_same_state_vector(state1: list, state2: list) -> bool:
             return False
 
     return True
+
+def amplitudes_to_stim_circuit(amplitudes):
+    """
+    Convert amplitude array to Stim circuit that prepares that state from |0...0⟩.
+    
+    Args:
+        amplitudes: List of complex numbers representing quantum state amplitudes
+    
+    Returns:
+        stim.Circuit that prepares the state (using indices 0, 1, 2...)
+        
+    Raises:
+        ValueError: If amplitudes invalid or state not stabilizer
+    """
+    import numpy as np
+    import stim
+    
+    amplitudes = np.array(amplitudes, dtype=complex)
+    n = len(amplitudes)
+    
+    # Validate input
+    if n == 0 or (n & (n - 1)) != 0:
+        raise ValueError(f"Amplitude array length {n} must be a power of 2")
+    
+    num_qubits = int(np.log2(n))
+    
+    # Check normalization
+    norm = np.sum(np.abs(amplitudes)**2)
+    if not np.isclose(norm, 1.0, rtol=1e-10):
+        raise ValueError(f"Amplitudes not normalized: norm = {norm}")
+    
+    circuit = stim.Circuit()
+    
+    # Single qubit states
+    if num_qubits == 1:
+        if np.allclose(amplitudes, [1, 0]):
+            return circuit  # |0⟩
+        elif np.allclose(amplitudes, [0, 1]):
+            circuit.append("X", [0])  # |1⟩
+        elif np.allclose(amplitudes, [1/np.sqrt(2), 1/np.sqrt(2)]):
+            circuit.append("H", [0])  # |+⟩
+        elif np.allclose(amplitudes, [1/np.sqrt(2), -1/np.sqrt(2)]):
+            circuit.append("H", [0])
+            circuit.append("Z", [0])  # |-⟩
+        elif np.allclose(amplitudes, [1/np.sqrt(2), 1j/np.sqrt(2)]):
+            circuit.append("H", [0])
+            circuit.append("S", [0])  # |i⟩
+        elif np.allclose(amplitudes, [1/np.sqrt(2), -1j/np.sqrt(2)]):
+            circuit.append("H", [0])
+            circuit.append("S_DAG", [0])  # |-i⟩
+        else:
+            raise ValueError(f"Single-qubit state is not a stabilizer state")
+        return circuit
+    
+    # Multi-qubit computational basis states
+    nonzero = np.where(np.abs(amplitudes) > 1e-10)[0]
+    if len(nonzero) == 1:
+        idx = nonzero[0]
+        if not np.isclose(amplitudes[idx], 1.0):
+            raise ValueError(f"Non-unit amplitude for basis state")
+        # Apply X gates for each 1 bit
+        for q in range(num_qubits):
+            if idx & (1 << q):
+                circuit.append("X", [q])
+        return circuit
+    
+    # Two qubit states
+    if num_qubits == 2:
+        # Bell states
+        if np.allclose(amplitudes, [1/np.sqrt(2), 0, 0, 1/np.sqrt(2)]):
+            # |Φ+⟩
+            circuit.append("H", [0])
+            circuit.append("CX", [0, 1])
+        elif np.allclose(amplitudes, [1/np.sqrt(2), 0, 0, -1/np.sqrt(2)]):
+            # |Φ-⟩
+            circuit.append("H", [0])
+            circuit.append("CX", [0, 1])
+            circuit.append("Z", [0])
+        elif np.allclose(amplitudes, [0, 1/np.sqrt(2), 1/np.sqrt(2), 0]):
+            # |Ψ+⟩
+            circuit.append("H", [0])
+            circuit.append("CX", [0, 1])
+            circuit.append("X", [0])
+        elif np.allclose(amplitudes, [0, 1/np.sqrt(2), -1/np.sqrt(2), 0]):
+            # |Ψ-⟩
+            circuit.append("H", [0])
+            circuit.append("CX", [0, 1])
+            circuit.append("X", [0])
+            circuit.append("Z", [0])
+        # Product states
+        elif np.allclose(amplitudes, [0.5, 0.5, 0.5, 0.5]):
+            # |++⟩
+            circuit.append("H", [0])
+            circuit.append("H", [1])
+        elif np.allclose(amplitudes, [0.5, -0.5, 0.5, -0.5]):
+            # |+-⟩
+            circuit.append("H", [0])
+            circuit.append("H", [1])
+            circuit.append("Z", [1])
+        else:
+            raise ValueError("2-qubit state is not a recognized stabilizer state")
+        return circuit
+    
+    # Three qubit GHZ state
+    if num_qubits == 3:
+        ghz = np.zeros(8)
+        ghz[0] = ghz[7] = 1/np.sqrt(2)
+        if np.allclose(amplitudes, ghz):
+            circuit.append("H", [0])
+            circuit.append("CX", [0, 1])
+            circuit.append("CX", [0, 2])
+            return circuit
+    
+    raise ValueError(f"{num_qubits}-qubit state is not a recognized stabilizer state")
+
