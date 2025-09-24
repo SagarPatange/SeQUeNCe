@@ -417,28 +417,18 @@ class StabilizerState(State):
     Stabilizer state with density matrix representation via Pauli tomography.
     Uses compiled samplers for efficiency and maintains a tableau for exact operations.
     """
-
     def __init__(self, keys: list[int], circuit: stim.Circuit = None, 
-                 shots: int = 8192, truncation: int = 1):
-        """
-        Initialize stabilizer state with density matrix representation.
-        
-        Args:
-            keys: List of quantum manager keys (typically 1-2)
-            circuit: Stim circuit to prepare the state (None = |0...0⟩)
-            shots: Number of samples for Pauli tomography
-            truncation: Dormant variable for future compatibility
-        """
+                shots: int = 1000, truncation: int = 1, base_seed: int = None):
         super().__init__()
         self.keys = list(keys)
         self.circuit = circuit if circuit is not None else stim.Circuit()
         self.shots = int(shots)
-        self.truncation = truncation  # Dormant for now
-        
-        # Lazy-initialized tableau
+        self.truncation = truncation
+        self.base_seed = base_seed  # Keep this for deterministic seeding
+        self.rng = None  # Don't create RNG here
         self._tableau = None
         
-        # Compute density matrix immediately
+        # Compute density matrix without extra RNG calls
         self.state = self._compute_density_matrix()
     
     @property
@@ -446,15 +436,11 @@ class StabilizerState(State):
         """Get tableau representation, computing it lazily if needed."""
         if self._tableau is None:
             if self.circuit and len(self.circuit) > 0:
-                # Create tableau directly from circuit
                 self._tableau = stim.Tableau.from_circuit(self.circuit)
             else:
-                # For empty circuit, create identity tableau
                 num_qubits = max(self.keys) + 1 if self.keys else 1
                 self._tableau = stim.Tableau(num_qubits)
-                
         return self._tableau
-    
     def serialize(self) -> dict:
         """Not supported for StabilizerState."""
         raise NotImplementedError(
@@ -498,13 +484,13 @@ class StabilizerState(State):
         # Build density matrix via Pauli expansion
         rho = np.zeros((2**k, 2**k), dtype=complex)
         
-        for pauli_string in itertools.product('IXYZ', repeat=k):
+        for i, pauli_string in enumerate(itertools.product('IXYZ', repeat=k)):
             # Build measurement circuit for this Pauli string
             meas_circuit = self.circuit.copy()
             
             # Add basis rotations and measurements
             measured_qubits = []
-            for i, (qubit, pauli) in enumerate(zip(self.keys, pauli_string)):
+            for j, (qubit, pauli) in enumerate(zip(self.keys, pauli_string)):
                 if pauli == 'I':
                     continue  # Don't measure identity
                 elif pauli == 'X':
@@ -515,14 +501,22 @@ class StabilizerState(State):
                 # Z needs no rotation
                 
                 meas_circuit.append("M", [qubit])
-                measured_qubits.append(i)
+                measured_qubits.append(j)
             
             # Estimate expectation value
             if not measured_qubits:
                 expectation = 1.0  # All identity operators
             else:
-                # Compile and sample
-                sampler = meas_circuit.compile_sampler()
+                # Use deterministic seeding - NO RNG CALLS
+                if self.base_seed is not None:
+                    # Deterministic seed based on base_seed and Pauli string index
+                    pauli_hash = hash(pauli_string) % (2**16)
+                    seed = (self.base_seed + i + pauli_hash) % (2**31)
+                else:
+                    seed = None  # Non-deterministic
+                
+                # Compile sampler with seed
+                sampler = meas_circuit.compile_sampler(seed=seed)
                 samples = sampler.sample(shots=self.shots)
                 
                 # Calculate expectation as average parity
@@ -541,6 +535,10 @@ class StabilizerState(State):
             rho += expectation * pauli_op
         
         rho /= (2**k)
+        
+        # Ensure Hermitian (fix numerical errors)
+        rho = (rho + rho.conj().T) / 2
+        
         return rho
     
     def measure(self, qubit_indices: list[int], basis: str = 'Z') -> list[int]:
@@ -581,9 +579,9 @@ class StabilizerState(State):
             keys=self.keys.copy(),
             circuit=self.circuit.copy(),
             shots=self.shots,
-            truncation=self.truncation
+            truncation=self.truncation,
+            base_seed=self.base_seed
         )
         new_state.state = self.state.copy()
-        # Don't copy the tableau - let it be recomputed if needed
         new_state._tableau = None
         return new_state

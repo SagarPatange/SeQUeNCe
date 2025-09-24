@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Dict, Any
+import numpy as np
 
 from .generation_base import EntanglementGenerationA, EntanglementGenerationB, QuantumCircuitMixin
 from .generation_message import EntanglementGenerationMessage, GenerationMsgType, valid_trigger_time
@@ -259,3 +260,67 @@ class SingleHeraldedB(EntanglementGenerationB):
                                                     time=time,
                                                     resolution=resolution)
             self.owner.send_message(node, message)
+
+# Stabilizer-compatible version
+@EntanglementGenerationA.register('single_heralded_stabilizer')
+class SingleHeraldedStabilizerA(SingleHeraldedA):
+    """Single-heralded protocol adapted for stabilizer formalism."""
+    
+    def update_memory(self) -> bool | None:
+        """Override for stabilizer - simplified since no BDS."""
+        if self not in self.owner.protocols:
+            return
+
+        self.ent_round += 1
+
+        if self.ent_round == 1:
+            return True
+
+        elif self.ent_round == 2:
+            # For stabilizer, we check detector clicks differently
+            if self.bsm_res[0] >= 1 and self.bsm_res[1] >= 1:
+                # Create entanglement using Stim
+                qm = self.owner.timeline.quantum_manager
+                self_key = self._qstate_key
+                remote_memory = self.owner.timeline.get_entity_by_name(self.remote_memo_id)
+                remote_key = remote_memory.qstate_key
+                
+                if hasattr(qm.states[self_key], 'circuit'):
+                    import stim
+                    # Create Bell pair circuit
+                    circuit = stim.Circuit()
+                    circuit.append("H", [self_key])
+                    circuit.append("CX", [self_key, remote_key])
+                    
+                    # Apply to both memories
+                    qm.states[self_key].circuit = circuit
+                    qm.states[self_key].keys = [self_key, remote_key]
+                    qm.states[self_key].state = qm.states[self_key]._compute_density_matrix()
+                    qm.states[remote_key] = qm.states[self_key]
+                
+                self._entanglement_succeed()
+                return True
+        
+        self._entanglement_fail()
+        return False
+
+    def emit_event(self) -> None:
+        """Override to use Stim circuits for state preparation."""
+        if self.ent_round == 1:
+            qm = self.owner.timeline.quantum_manager
+            key = self.memory.qstate_key
+            
+            if hasattr(qm.states[key], 'circuit'):
+                import stim
+                # Prepare |+⟩ state
+                qm.states[key].circuit = stim.Circuit()
+                qm.states[key].circuit.append("H", [key])
+                qm.states[key].state = qm.states[key]._compute_density_matrix()
+            else:
+                # Fallback
+                self.memory.update_state([1/np.sqrt(2), 1/np.sqrt(2)])
+        
+        self.memory.excite(self.middle, protocol='sh')
+
+# Register existing B class for stabilizer name  
+EntanglementGenerationB.register('single_heralded_stabilizer', SingleHeraldedB)

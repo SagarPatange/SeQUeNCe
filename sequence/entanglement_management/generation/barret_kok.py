@@ -14,7 +14,7 @@ from .generation_base import EntanglementGenerationA, EntanglementGenerationB, Q
 from ...kernel.event import Event
 from ...kernel.process import Process
 from ...utils import log
-
+import stim
 
 @EntanglementGenerationA.register(BARRET_KOK)
 class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
@@ -70,12 +70,15 @@ class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
             return
 
         self.ent_round += 1
+        log.logger.info(f"[T:{self.owner.timeline.now():,}] {self.name} UPDATE round={self.ent_round}, bsm={self.bsm_res}")
 
         if self.ent_round == 1:
+            log.logger.info(f"[T:{self.owner.timeline.now():,}] Round 1 done")
             return True
 
         elif self.ent_round == 2 and self.bsm_res[0] != -1:
             self.owner.timeline.quantum_manager.run_circuit(self._flip_circuit, [self._qstate_key])
+            log.logger.info(f"[T:{self.owner.timeline.now():,}] Round 2 done")
             return True
 
         elif self.ent_round == 3 and self.bsm_res[1] != -1:
@@ -84,11 +87,13 @@ class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
                 self.owner.timeline.quantum_manager.run_circuit(self._flip_circuit, [self._qstate_key])
             elif self.bsm_res[0] != self.bsm_res[1]:
                 self.owner.timeline.quantum_manager.run_circuit(self._z_circuit, [self._qstate_key])
+            log.logger.info(f"[T:{self.owner.timeline.now():,}] SUCCESS")
             self._entanglement_succeed()
             return True
 
         else:
             # entanglement failed
+            log.logger.info(f"[T:{self.owner.timeline.now():,}] FAILED")
             self._entanglement_fail()
             return False
 
@@ -268,3 +273,70 @@ class BarretKokB(EntanglementGenerationB):
                                                     time=time,
                                                     resolution=resolution)
             self.owner.send_message(node, message)
+
+# Stabilizer-compatible version
+@EntanglementGenerationA.register('barret_kok_stabilizer')
+class BarretKokStabilizerA(BarretKokA):
+    """Barrett-Kok protocol adapted for stabilizer formalism."""
+    
+    def emit_event(self) -> None:
+        """Override to use Stim circuits for state preparation."""
+        if self.ent_round == 1:
+            # Prepare |+⟩ state using Stim
+            qm = self.owner.timeline.quantum_manager
+            key = self.memory.qstate_key
+        
+            # Reset to |0⟩
+            qm.states[key].circuit = stim.Circuit()
+            # Apply H to get |+⟩
+            qm.states[key].circuit.append("H", [key])
+            qm.states[key].state = qm.states[key]._compute_density_matrix()
+
+        
+        self.memory.excite(self.middle)
+    
+    def update_memory(self) -> bool | None:
+        """Override to use Stim circuits for gate operations."""
+        if self not in self.owner.protocols:
+            return
+
+        self.ent_round += 1
+        qm = self.owner.timeline.quantum_manager
+        key = self._qstate_key
+
+        if self.ent_round == 1:
+            return True
+
+        elif self.ent_round == 2 and self.bsm_res[0] != -1:
+            # Apply X gate using Stim
+            if hasattr(qm.states[key], 'circuit'):
+                qm.states[key].circuit.append("X", [key])
+                qm.states[key].state = qm.states[key]._compute_density_matrix()
+            else:
+                qm.run_circuit(self._flip_circuit, [key])
+            return True
+
+        elif self.ent_round == 3 and self.bsm_res[1] != -1:
+            # Apply corrections
+            if self.primary:
+                if hasattr(qm.states[key], 'circuit'):
+                    qm.states[key].circuit.append("X", [key])
+                    qm.states[key].state = qm.states[key]._compute_density_matrix()
+                else:
+                    qm.run_circuit(self._flip_circuit, [key])
+                    
+            elif self.bsm_res[0] != self.bsm_res[1]:
+                if hasattr(qm.states[key], 'circuit'):
+                    qm.states[key].circuit.append("Z", [key])
+                    qm.states[key].state = qm.states[key]._compute_density_matrix()
+                else:
+                    qm.run_circuit(self._z_circuit, [key])
+            
+            self._entanglement_succeed()
+            return True
+        else:
+            self._entanglement_fail()
+            return False
+
+# Register existing B class for stabilizer name
+EntanglementGenerationB.register('barret_kok_stabilizer', BarretKokB)

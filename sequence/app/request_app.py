@@ -162,3 +162,8 @@ class RequestApp:
 
     def __str__(self) -> str:
         return self.name
+
+
+class RequestLogicalPairApp:
+
+    pass

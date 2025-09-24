@@ -833,261 +833,226 @@ class QuantumManagerBellDiagonal(QuantumManager):
 @QuantumManager.register(STABILIZER_FORMALISM)
 class QuantumManagerStabilizer(QuantumManager):
     """
-    Quantum manager for stabilizer formalism using Stim backend.
-    
-    Key design principles:
-    - Each state stores its own Stim circuit and keys
-    - States start as single-qubit (2x2 density matrices)
-    - Manual grouping combines circuits while preserving qubit indices
-    - Efficient Pauli tomography via compiled samplers
+    Quantum manager for stabilizer formalism using Stim with seeded sampling.
     """
     
-    def __init__(self, truncation: int = 1, shots: int = 1000, **kwargs):
-        """
-        Initialize the stabilizer quantum manager.
-        
-        Args:
-            truncation: Dormant parameter for future compatibility
-            shots: Number of samples for Pauli tomography (default 1000)
-        """
+    def __init__(self, truncation: int = 1, shots: int = 1000, seed: int = None, **kwargs):
+        """Initialize the stabilizer quantum manager with seed support."""
         super().__init__(truncation=truncation)
         self.shots = shots
+        self.base_seed = seed
+        self.rng = None  
+        self._seed_counter = 0
+    
+    def _get_next_seed(self) -> Optional[int]:
+        """Generate next seed for deterministic sampling."""
+        if self.rng is None:
+            return None
+        self._seed_counter += 1
+        return self.rng.integers(0, 2**31)
     
     def new(self, state: Optional[stim.Circuit] = None) -> int:
         """
-        Create a new qubit.
-        
-        Args:
-            state: Optional stim.Circuit that prepares the initial state.
-                   If None, creates a qubit in |0⟩ state (empty circuit).
-                   If provided, must be a stim.Circuit object.
-        
-        Returns:
-            Key for the new qubit
-        
-        Raises:
-            TypeError: If state is not None and not a stim.Circuit
+        Create a new qubit with optional initial state circuit.
         """
-        # Validate input type BEFORE incrementing counter
         if state is not None and not isinstance(state, stim.Circuit):
             raise TypeError(f"state must be a stim.Circuit or None, got {type(state)}")
         
-        # Only increment if validation passes
         key = self._least_available
         self._least_available += 1
         
-        # Use empty circuit if None provided
         initial_circuit = stim.Circuit() if state is None else state
         
-        # Create single-qubit state with provided or empty circuit
+        # Pass base seed to state for deterministic density matrix computation
         state_obj = StabilizerState(
             keys=[key],
             circuit=initial_circuit,
             shots=self.shots,
-            truncation=self.truncation
+            truncation=self.truncation,
+            base_seed=self.base_seed
         )
         
         self.states[key] = state_obj
         return key
     
-    def run_circuit(self, circuit: stim.Circuit, keys: List[int], meas_samp=None) -> Dict[int, int]:
+    def run_circuit(self, circuit, keys: List[int], meas_samp=None) -> Dict[int, int]:
         """
-        Run a stim.Circuit on specified qubits.
-        
-        Updates the Stim circuits stored in the states and handles measurements.
+        Run a circuit on specified qubits with deterministic measurement.
+        Uses meas_samp directly for randomness, matching ket-state behavior.
         
         Args:
-            circuit: stim.Circuit to apply
+            circuit: stim.Circuit or SeQUeNCe Circuit to apply
             keys: Keys of qubits that circuit positions map to
-            meas_samp: Random sample for measurement (if needed)
+            meas_samp: Random sample [0,1] for measurement
         
         Returns:
             Dictionary of measurement results (empty if no measurements)
         """
-        # Note: Parent class expects a different circuit type, but we override completely
-        # super().run_circuit(circuit, keys, meas_samp)
         
+        # Convert to Stim circuit if needed
+        if isinstance(circuit, stim.Circuit):
+            stim_circuit = circuit
+        elif isinstance(circuit, Circuit):
+            stim_circuit = self._sequence_to_stim(circuit, keys)
+        elif hasattr(circuit, 'gates') and hasattr(circuit, 'measured_qubits'):
+            stim_circuit = self._sequence_to_stim(circuit, keys)
+        else:
+            raise TypeError(f"circuit must be stim.Circuit or SeQUeNCe Circuit, got {type(circuit)}")
+        
+        # Check for measurements
         measurements = []
+        for instruction in stim_circuit:
+            if instruction.name == 'M':
+                targets = instruction.targets_copy()
+                for target in targets:
+                    measurements.append(target.value)
         
-        # Parse stim circuit instructions
-        for instruction in circuit:
-            gate_name = instruction.name
-            targets = [t.value for t in instruction.targets_copy()]
-            
-            if gate_name == 'M':
-                # Store measurements for later processing
-                measurements.extend(targets)
-            else:
-                # Check if multi-qubit gate needs grouping
-                if len(targets) > 1:
-                    gate_keys = [keys[i] for i in targets]
-                    states = [self.states[k] for k in gate_keys if k in self.states]
-                    if not all(s == states[0] for s in states):
-                        # Qubits are in different states, need to group
-                        self.group_qubits([keys[t] for t in targets])
-                
-                # Map targets to actual qubit keys
-                # Check if targets are positions or absolute indices
-                if all(t < len(keys) for t in targets):
-                    # Targets are positions in keys list
-                    gate_qubits = [keys[i] for i in targets]
-                else:
-                    # Targets are absolute qubit indices
-                    gate_qubits = targets
-                
-                # Get the state and add operation to its circuit
-                state = self.states[keys[targets[0]]]
-                state.circuit.append(gate_name, gate_qubits)
-        
-        # Handle measurements if any
         if measurements:
+            # Handle measurements
             results = {}
-            measured_keys = [keys[i] for i in measurements]
+            measured_keys = [keys[i] for i in measurements if i < len(keys)]
             
-            # Get the state containing these qubits
-            state = self.states[measured_keys[0]]
-            
-            # Create measurement circuit
-            meas_circuit = state.circuit.copy()
-            for key in measured_keys:
-                meas_circuit.append("M", [key])
-            
-            # Sample once
-            sampler = meas_circuit.compile_sampler()
-            sample = sampler.sample(shots=1)[0]
-            
-            # Extract results and create new single-qubit states
-            for i, key in enumerate(measured_keys):
-                results[key] = int(sample[i]) if i < len(sample) else 0
+            if measured_keys:
+                # Get the state containing these qubits
+                state = self.states[measured_keys[0]]
                 
-                # Create new single-qubit state for measured qubit
-                new_circuit = stim.Circuit()
-                if results[key] == 1:
-                    new_circuit.append("X", [key])
+                # Create measurement circuit
+                meas_circuit = state.circuit.copy()
+                for key in measured_keys:
+                    meas_circuit.append("M", [key])
                 
-                self.states[key] = StabilizerState(
-                    keys=[key],
-                    circuit=new_circuit,
-                    shots=self.shots,
-                    truncation=self.truncation
-                )
+                # Use meas_samp directly as seed - no extra RNG calls
+                if meas_samp is not None:
+                    # Convert [0,1] float to integer seed deterministically
+                    seed = int(meas_samp * (2**31 - 1))
+                else:
+                    # Non-deterministic if no sample provided
+                    seed = None
+                
+                # Compile sampler with seed for deterministic results
+                sampler = meas_circuit.compile_sampler(seed=seed)
+                sample = sampler.sample(shots=1)[0]
+                
+                # Extract results and create new single-qubit states
+                for i, key in enumerate(measured_keys):
+                    results[key] = int(sample[i]) if i < len(sample) else 0
+                    
+                    # Create new single-qubit state for measured qubit
+                    new_circuit = stim.Circuit()
+                    if results[key] == 1:
+                        new_circuit.append("X", [key])
+                    
+                    self.states[key] = StabilizerState(
+                        keys=[key],
+                        circuit=new_circuit,
+                        shots=self.shots,
+                        truncation=self.truncation,
+                        base_seed=None  # No base_seed to avoid extra RNG
+                    )
+                
+                return results
             
-            return results
+            return {}
         
-        # Update density matrices for affected states
+        # For non-measurement operations, update circuit
         if keys:
+            # Check if we need to group qubits for multi-qubit operations
+            if len(keys) > 1:
+                states = [self.states[k] for k in keys if k in self.states]
+                if len(states) > 1 and not all(s == states[0] for s in states):
+                    self.group_qubits(keys)
+            
+            # Get the state (after potential grouping)
             state = self.states[keys[0]]
+            
+            # Append non-measurement operations to state circuit
+            for instruction in stim_circuit:
+                if instruction.name != 'M':
+                    mapped_targets = []
+                    for target in instruction.targets_copy():
+                        target_val = target.value
+                        if target_val < len(keys):
+                            mapped_targets.append(keys[target_val])
+                        else:
+                            mapped_targets.append(target_val)
+                    
+                    if mapped_targets:
+                        state.circuit.append(instruction.name, mapped_targets)
+            
+            # Recompute density matrix deterministically
             state.state = state._compute_density_matrix()
         
         return {}
+        
+    def _sequence_to_stim(self, circuit, keys: List[int]) -> stim.Circuit:
+        """Convert SeQUeNCe Circuit to Stim Circuit."""
+        stim_circuit = stim.Circuit()
+        
+        for gate_info in circuit.gates:
+            gate_name, indices, arg = gate_info
+            
+            # Map SeQUeNCe gate names to Stim
+            gate_map = {
+                'h': 'H',
+                'x': 'X',
+                'y': 'Y',
+                'z': 'Z',
+                's': 'S',
+                'sdg': 'S_DAG',
+                't': 'T',
+                'cx': 'CX',
+                'cz': 'CZ',
+            }
+            
+            if gate_name in gate_map:
+                stim_name = gate_map[gate_name]
+                # Use circuit indices directly (Stim expects 0-based positions)
+                stim_circuit.append(stim_name, indices)
+        
+        # Add measurements
+        for qubit_idx in circuit.measured_qubits:
+            if qubit_idx < len(keys):
+                stim_circuit.append("M", [qubit_idx])
+        
+        return stim_circuit
     
     def group_qubits(self, keys: List[int]) -> None:
-        """
-        Manually group qubits together for joint density matrix computation.
-        
-        This combines the circuits of multiple qubits while preserving
-        the operations on each qubit's specific index.
-        
-        Args:
-            keys: List of qubit keys to group together
-        """
+        """Group qubits together for joint operations."""
         if len(keys) <= 1:
             return
         
         # Check if already grouped
         states = [self.states[key] for key in keys if key in self.states]
         if all(s == states[0] for s in states):
-            return  # Already grouped
+            return
         
-        # Combine circuits from all involved states
+        # Combine circuits and keys
         combined_circuit = stim.Circuit()
         all_keys = []
-        
-        # Collect all unique states and their circuits
         seen_states = set()
+        
         for key in keys:
             state = self.states[key]
             if state not in seen_states:
                 seen_states.add(state)
                 all_keys.extend(state.keys)
                 
-                # Copy operations from this state's circuit
-                # The operations already have the correct qubit indices
+                # Copy operations from state's circuit
                 for instruction in state.circuit:
                     combined_circuit.append(instruction)
         
-        # Create new grouped state
+        # Create new grouped state with seed
         grouped_state = StabilizerState(
             keys=all_keys,
             circuit=combined_circuit,
             shots=self.shots,
-            truncation=self.truncation
+            truncation=self.truncation,
+            base_seed=self.base_seed
         )
         
-        # Update all qubits to point to this grouped state
+        # Update all qubits to point to grouped state
         for key in all_keys:
             self.states[key] = grouped_state
-    
-@QuantumManager.register(STABILIZER_FORMALISM)
-class QuantumManagerStabilizer(QuantumManager):
-    """
-    Quantum manager for stabilizer formalism using Stim backend.
-    
-    Key design principles:
-    - Each state stores its own Stim circuit and keys
-    - States start as single-qubit (2x2 density matrices)
-    - Manual grouping combines circuits while preserving qubit indices
-    - Efficient Pauli tomography via compiled samplers
-    """
-    
-    def __init__(self, truncation: int = 1, shots: int = 1000, **kwargs):
-        """
-        Initialize the stabilizer quantum manager.
-        
-        Args:
-            truncation: Dormant parameter for future compatibility
-            shots: Number of samples for Pauli tomography (default 1000)
-        """
-        super().__init__(truncation=truncation)
-        self.shots = shots
-    
-    def new(self, state: Optional[stim.Circuit] = None) -> int:
-        """
-        Create a new qubit.
-        
-        Args:
-            state: Optional stim.Circuit that prepares the initial state.
-                   If None, creates a qubit in |0⟩ state (empty circuit).
-                   If provided, must be a stim.Circuit object.
-        
-        Returns:
-            Key for the new qubit
-        
-        Raises:
-            TypeError: If state is not None and not a stim.Circuit
-        """
-        # Validate input type BEFORE incrementing counter
-        if state is not None and not isinstance(state, stim.Circuit):
-            raise TypeError(f"state must be a stim.Circuit or None, got {type(state)}")
-        
-        # Only increment if validation passes
-        key = self._least_available
-        self._least_available += 1
-        
-        # Use empty circuit if None provided
-        initial_circuit = stim.Circuit() if state is None else state
-        
-        # Create single-qubit state with provided or empty circuit
-        state_obj = StabilizerState(
-            keys=[key],
-            circuit=initial_circuit,
-            shots=self.shots,
-            truncation=self.truncation
-        )
-        
-        self.states[key] = state_obj
-        return key
-    
     def compute_density_matrix(self, keys: List[int]) -> np.ndarray:
         """
         Compute the density matrix for specific qubits.
@@ -1157,6 +1122,68 @@ class QuantumManagerStabilizer(QuantumManager):
         # Return the computed density matrix
         return temp_state.state
     
+    def set(self, keys: List[int], amplitudes: List[complex]) -> None:
+        """Set qubits to a state specified by amplitudes."""
+        import numpy as np
+
+        circuit = stim.Circuit()
+
+        if len(keys) == 1 and len(amplitudes) == 2:
+            # Single qubit states
+            plus_state = [1/np.sqrt(2), 1/np.sqrt(2)]
+            minus_state = [1/np.sqrt(2), -1/np.sqrt(2)]
+            zero_state = [1, 0]
+            one_state = [0, 1]
+
+            if np.allclose(amplitudes, plus_state):
+                # |+⟩ state: H|0⟩
+                circuit.append("H", [keys[0]])
+            elif np.allclose(amplitudes, minus_state):
+                # |-⟩ state: X|0⟩ then H
+                circuit.append("X", [keys[0]])
+                circuit.append("H", [keys[0]])
+            elif np.allclose(amplitudes, one_state):
+                # |1⟩ state: X|0⟩
+                circuit.append("X", [keys[0]])
+            # |0⟩ state needs no gates (empty circuit)
+
+        elif len(keys) == 2 and len(amplitudes) == 4:
+            # Two qubit Bell states
+            phi_plus = [1/np.sqrt(2), 0, 0, 1/np.sqrt(2)]    # |Φ+⟩ = (|00⟩ + |11⟩)/√2
+            phi_minus = [1/np.sqrt(2), 0, 0, -1/np.sqrt(2)]   # |Φ-⟩ = (|00⟩ - |11⟩)/√2
+            psi_plus = [0, 1/np.sqrt(2), 1/np.sqrt(2), 0]     # |Ψ+⟩ = (|01⟩ + |10⟩)/√2
+            psi_minus = [0, 1/np.sqrt(2), -1/np.sqrt(2), 0]   # |Ψ-⟩ = (|01⟩ - |10⟩)/√2
+
+            if np.allclose(amplitudes, phi_plus):
+                circuit.append("H", [keys[0]])
+                circuit.append("CX", [keys[0], keys[1]])
+            elif np.allclose(amplitudes, phi_minus):
+                circuit.append("H", [keys[0]])
+                circuit.append("CX", [keys[0], keys[1]])
+                circuit.append("Z", [keys[0]])
+            elif np.allclose(amplitudes, psi_plus):
+                circuit.append("H", [keys[0]])
+                circuit.append("CX", [keys[0], keys[1]])
+                circuit.append("X", [keys[1]])
+            elif np.allclose(amplitudes, psi_minus):
+                circuit.append("H", [keys[0]])
+                circuit.append("CX", [keys[0], keys[1]])
+                circuit.append("X", [keys[1]])
+                circuit.append("Z", [keys[0]])
+
+        # Create new state with circuit
+        new_state = StabilizerState(
+            keys=keys,
+            circuit=circuit,
+            shots=self.shots,
+            truncation=self.truncation,
+            base_seed=self.base_seed
+        )
+
+        # Update all keys to point to new state
+        for key in keys:
+            self.states[key] = new_state
+
     def get_density_matrix(self, key: int) -> np.ndarray:
         """
         Get the density matrix for a qubit.
