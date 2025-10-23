@@ -8,6 +8,7 @@ Also defined is a function to automatically construct a BSM of a specified type.
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 import numpy as np
+import stim
 
 if TYPE_CHECKING:
     from ..kernel.quantum_manager import QuantumManager
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
 
 from numpy import outer, add, zeros, array_equal
 
+from ..kernel.quantum_utils import append_bell_state
 from .circuit import Circuit
 from .detector import Detector
 from .photon import Photon
@@ -81,11 +83,11 @@ def _set_state_with_fidelity(keys: list[int], desired_state: list[complex], fide
         qm.set(keys, state)
         
     elif formalism == STABILIZER_FORMALISM:
-        probabilities = [(1 - fidelity) / 3] * 4
-        probabilities[possible_states.index(desired_state)] = fidelity
-        state_ind = rng.choice(4, p=probabilities)
-        log.logger.info(f"Stabilizer: fidelity={fidelity}, random state selection")
-        _set_pure_state(keys, possible_states[state_ind], qm)
+        log.logger.info(f"Stabilizer: fidelity={fidelity}, Werner state via DEPOLARIZE2")
+        circuit = stim.Circuit()
+        append_bell_state(circuit, desired_state, keys)
+        circuit.append("DEPOLARIZE2", [keys[0], keys[1]], (1-fidelity))
+        qm.set(keys, circuit)
         
     else:
         raise Exception("Invalid quantum manager with formalism {}".format(formalism))
@@ -121,7 +123,8 @@ def _eq_psi_plus(state: "State", formalism: str):
             # Create ideal |ψ+⟩ density matrix
             psi_plus = np.array([0, 1/np.sqrt(2), 1/np.sqrt(2), 0])
             ideal_rho = np.outer(psi_plus, psi_plus.conj())
-            return np.allclose(rho, ideal_rho, atol=0.1)
+            equal_dms = np.allclose(rho, ideal_rho, atol=0.1)
+            return equal_dms
         return False
     #########################################
 

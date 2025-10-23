@@ -8,6 +8,9 @@ from functools import lru_cache
 from math import sqrt
 import random
 import math
+import stim
+import numpy as np
+from typing import List
 from numpy import array, kron, identity, zeros, trace, outer, eye
 from scipy.linalg import sqrtm
 from ..constants import EPSILON
@@ -576,3 +579,51 @@ def amplitudes_to_stim_circuit(amplitudes):
     
     raise ValueError(f"{num_qubits}-qubit state is not a recognized stabilizer state")
 
+
+def append_bell_state(circuit: stim.Circuit, 
+                     amplitudes: List[complex], 
+                     qubit_indices: List[int]) -> stim.Circuit:
+    """
+    Append Bell state preparation gates to an existing Stim circuit.
+    
+    Args:
+        circuit: Existing stim.Circuit to append to
+        amplitudes: List of 4 complex numbers [a00, a01, a10, a11]
+        qubit_indices: Two qubit indices
+    
+    Returns:
+        The same circuit (modified in place)
+    """
+    
+    q0, q1 = qubit_indices
+    amps = np.array(amplitudes, dtype=complex)
+    
+    # Normalize
+    norm = np.sqrt(np.sum(np.abs(amps)**2))
+    if abs(norm - 1.0) > 1e-6:
+        amps = amps / norm
+    
+    # Define Bell states
+    phi_plus = np.array([1/sqrt(2), 0, 0, 1/sqrt(2)], dtype=complex)
+    phi_minus = np.array([1/sqrt(2), 0, 0, -1/sqrt(2)], dtype=complex)
+    psi_plus = np.array([0, 1/sqrt(2), 1/sqrt(2), 0], dtype=complex)
+    psi_minus = np.array([0, 1/sqrt(2), -1/sqrt(2), 0], dtype=complex)
+    
+    # Create base |Φ+⟩
+    circuit.append("H", [q0])
+    circuit.append("CX", [q0, q1])
+    
+    # Apply corrections
+    if np.allclose(amps, phi_plus, atol=1e-10):
+        pass
+    elif np.allclose(amps, phi_minus, atol=1e-10):
+        circuit.append("Z", [q0])
+    elif np.allclose(amps, psi_plus, atol=1e-10):
+        circuit.append("X", [q1])
+    elif np.allclose(amps, psi_minus, atol=1e-10):
+        circuit.append("X", [q1])
+        circuit.append("Z", [q0])
+    else:
+        raise ValueError("Not a valid Bell state")
+    
+    return circuit
