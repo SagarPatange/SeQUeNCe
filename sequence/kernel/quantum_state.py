@@ -412,15 +412,21 @@ class BellDiagonalState(State):
         self.state = array(diag_elems, dtype=float)
         self.keys = keys
 
+
 class StabilizerState(State):
     """
     Stabilizer state with density matrix representation via Pauli tomography.
     Uses compiled samplers for efficiency and maintains a tableau for exact operations.
     """
-    def __init__(self, keys: list[int], circuit: stim.Circuit = None, 
+    def __init__(self, original_key: int, keys: list[int], circuit: stim.Circuit = None, 
                 shots: int = 1000, truncation: int = 1, base_seed: int = None):
         super().__init__()
+        self.original_key = original_key
         self.keys = list(keys)
+        
+        # Validate that original_key is in keys
+        if self.original_key not in self.keys:
+            raise ValueError(f"original_key {self.original_key} must be in keys {self.keys}")
         self.circuit = circuit if circuit is not None else stim.Circuit()
         self.shots = int(shots)
         self.truncation = truncation
@@ -429,46 +435,131 @@ class StabilizerState(State):
         self._tableau = None
         
         # Compute density matrix without extra RNG calls
-        self.state = self._compute_density_matrix()
+        self.state = None
     
     @property
-    def tableau(self) -> stim.Tableau:
-        """Get tableau representation, computing it lazily if needed."""
+    def tableau(self) -> stim.TableauSimulator:
+        """Get tableau simulator, creating it lazily if needed."""
         if self._tableau is None:
+            self._tableau = stim.TableauSimulator()
             if self.circuit and len(self.circuit) > 0:
-                self._tableau = stim.Tableau.from_circuit(self.circuit)
-            else:
-                num_qubits = max(self.keys) + 1 if self.keys else 1
-                self._tableau = stim.Tableau(num_qubits)
+                self._tableau.do(self.circuit)
         return self._tableau
+    
+    
     def serialize(self) -> dict:
         """Not supported for StabilizerState."""
         raise NotImplementedError(
             "StabilizerState cannot use the base complex-vector serialization. "
             "Persist with a custom stabilizer/circuit schema instead.")
+     
         
     def deserialize(self) -> None:
         """Not supported for StabilizerState."""
         raise NotImplementedError(
             "StabilizerState cannot be deserialized from the base complex-vector format. "
             "Load from a custom stabilizer/circuit schema instead.")
+       
         
-    def set(self, circuit: stim.Circuit, sampled_keys: list[int] = None):
+    def set(self, quantum_manager, circuit: stim.Circuit, sampled_keys: list[int] = None, compute_dm: bool = True):
         """
-        Set state from a circuit by sampling specific qubits.
+        Set state from a circuit by creating a fresh circuit that resets specified qubits.
         
-        Args:
-            circuit: Stim circuit that prepares the full state
-            sampled_keys: Which qubits to include in density matrix (None = use self.keys)
+        BEHAVIOR: Creates completely new circuit (replaces old one) instead of appending.
+        Detects subset setting and ungroups other qubits to maintain consistency.
         """
-        self.circuit = circuit
-        if sampled_keys is not None:
-            self.keys = sampled_keys
+        # Validation 1: sampled_keys cannot be None
+        if sampled_keys is None:
+            raise ValueError("sampled_keys cannot be None")
         
-        # Invalidate cached tableau
+        # Validation 2: Extract which qubits the circuit operates on
+        circuit_qubits = set()
+        for instruction in circuit:
+            for target in instruction.targets_copy():
+                circuit_qubits.add(target.value)
+        
+        # Validation 3: Circuit must operate on subset of sampled_keys
+        if not circuit_qubits.issubset(set(sampled_keys)):
+            raise ValueError(
+                f"Circuit operates on qubits {sorted(circuit_qubits)} "
+                f"but sampled_keys only includes {sampled_keys}. "
+                f"Circuit qubits must be subset of sampled_keys."
+            )
+        
+        # Validation 4: original_key must remain in keys (keys never change)
+        if self.original_key not in self.keys:
+            raise ValueError(
+                f"original_key={self.original_key} must be in keys={self.keys}"
+            )
+        
+        # Validation 5: sampled_keys must be subset of current keys
+        if not set(sampled_keys).issubset(set(self.keys)):
+            raise ValueError(
+                f"sampled_keys {sampled_keys} must be subset of current keys {self.keys}"
+            )
+        
+        # ============================================================================
+        # CRITICAL FIX: Check if we're setting a SUBSET of grouped qubits
+        # If yes, ungroup the other qubits first to maintain consistency
+        # ============================================================================
+        if set(sampled_keys) != set(self.keys):
+            # We're setting a subset - need to ungroup the other qubits first
+            # This prevents inconsistent state where circuit doesn't match keys
+            
+            for key in self.keys:
+                if key not in sampled_keys:
+                    # This qubit is NOT being set - give it its own circuit
+                    other_state = quantum_manager.states[key]
+                    
+                    # Create a fresh circuit for this qubit (reset to |0⟩)
+                    other_circuit = stim.Circuit()
+                    other_circuit.append("R", [key])
+                    
+                    # Assign new circuit and update keys to be solo
+                    other_state.circuit = other_circuit
+                    other_state.keys = [key]
+                    other_state._tableau = None
+            
+            # Update self.keys to only include sampled_keys
+            self.keys = sorted(sampled_keys)
+        
+        # Step 1: Check if all sampled_keys share the same circuit, if not, group them
+        states_to_check = [quantum_manager.states[k] for k in sampled_keys if k in quantum_manager.states]
+        if len(states_to_check) > 1 and not all(s.circuit is states_to_check[0].circuit for s in states_to_check):
+            # Need to group these qubits first
+            quantum_manager.group_qubits(sampled_keys)
+        
+        # Step 2: Create FRESH circuit that completely replaces the old one
+        new_circuit = stim.Circuit()
+        
+        # Add reset gates for sampled qubits (deduplicated)
+        unique_keys = sorted(set(sampled_keys))
+        if unique_keys:
+            new_circuit.append("R", unique_keys)
+        
+        # Step 3: Add new circuit operations to the NEW circuit
+        for instruction in circuit:
+            gate_args = instruction.gate_args_copy()
+            targets = [t.value for t in instruction.targets_copy()]
+            
+            if gate_args:
+                new_circuit.append(instruction.name, targets, *gate_args)
+            else:
+                new_circuit.append(instruction.name, targets)
+        
+        # Step 4: REPLACE the old circuit for ALL qubits in the (now updated) group
+        # After ungrouping above, self.keys now only contains sampled_keys
+        for key in self.keys:
+            if key in quantum_manager.states:
+                quantum_manager.states[key].circuit = new_circuit
+        
+        # Step 5: Invalidate cached tableau
         self._tableau = None
         
-        self.state = self._compute_density_matrix()
+        # Step 6: Optionally recompute density matrix
+        if compute_dm:
+            self.state = self._compute_density_matrix()
+   
     
     def _compute_density_matrix(self) -> np.ndarray:
         """Compute density matrix via Pauli tomography using compiled samplers."""
@@ -535,15 +626,35 @@ class StabilizerState(State):
             rho += expectation * pauli_op
         
         rho /= (2**k)
-        
+
+
         # Ensure Hermitian (fix numerical errors)
         rho = (rho + rho.conj().T) / 2
         
         return rho
-    
+
+
+    def group_qubits(self, quantum_manager, keys_to_group: List[int]) -> None:
+        """
+        Group this state with other qubits in the quantum manager.
+        
+        This is a helper method that calls the quantum manager's group_qubits.
+        
+        Args:
+            quantum_manager: Reference to the quantum manager
+            keys_to_group: List of qubit keys to group together (must include self.original_key)
+        """
+        if self.original_key not in keys_to_group:
+            raise ValueError(
+                f"Cannot group: original_key={self.original_key} must be in keys_to_group={keys_to_group}"
+            )
+        
+        quantum_manager.group_qubits(keys_to_group)
+        
+        
     def measure(self, qubit_indices: list[int], basis: str = 'Z') -> list[int]:
         """
-        Sample measurements without modifying the state.
+        Measure qubits, collapsing the state and preserving correlations.
         
         Args:
             qubit_indices: Indices within self.keys to measure
@@ -552,26 +663,129 @@ class StabilizerState(State):
         Returns:
             List of measurement outcomes (0 or 1)
         """
-        meas_circuit = self.circuit.copy()
+        results = []
         
         for idx in qubit_indices:
             if idx >= len(self.keys):
+                results.append(0)
                 continue
+            
             qubit = self.keys[idx]
             
+            # Apply basis rotation, measure, then undo rotation
             if basis == 'X':
-                meas_circuit.append("H", [qubit])
+                self.tableau.h(qubit)
+                outcome = int(self.tableau.measure(qubit))
+                self.tableau.h(qubit)
             elif basis == 'Y':
-                meas_circuit.append("S_DAG", [qubit])
-                meas_circuit.append("H", [qubit])
+                self.tableau.s_dag(qubit)
+                self.tableau.h(qubit)
+                outcome = int(self.tableau.measure(qubit))
+                self.tableau.h(qubit)
+                self.tableau.s(qubit)
+            else:  # Z basis
+                outcome = int(self.tableau.measure(qubit))
             
-            meas_circuit.append("M", [qubit])
+            results.append(outcome)
         
-        sampler = meas_circuit.compile_sampler()
-        sample = sampler.sample(shots=1)[0]
+        # Invalidate cached density matrix since state changed
+        self.state = None
         
-        # Extract results for requested qubits
-        return [int(sample[i]) if i < len(sample) else 0 for i in range(len(qubit_indices))]
+        return results
+    
+    
+    def set_density_matrix(self, density_matrix: np.ndarray) -> None:
+        """
+        Set the density matrix directly without changing any other attributes.
+        
+        This is useful when you've computed a density matrix externally and want
+        to update the state without affecting original_key, keys, or circuit.
+        
+        Args:
+            density_matrix: Pre-computed density matrix as numpy array
+        """
+        # Validation: check dimensions match expected size
+        expected_dim = 2 ** len(self.keys)
+        if density_matrix.shape != (expected_dim, expected_dim):
+            raise ValueError(
+                f"Density matrix shape {density_matrix.shape} doesn't match "
+                f"expected shape ({expected_dim}, {expected_dim}) for {len(self.keys)} qubits"
+            )
+        
+        self.state = density_matrix
+        
+        
+    def compute_density_matrix(self, keys_subset: List[int] = None) -> np.ndarray:
+        """
+        Compute density matrix for this state, optionally for a subset of qubits.
+        
+        Args:
+            keys_subset: Subset of self.keys to compute density matrix for.
+                        If None, computes for all self.keys.
+        
+        Returns:
+            Density matrix as numpy array
+        """
+        if keys_subset is None:
+            # Compute for all qubits in this state
+            return self._compute_density_matrix()
+        
+        # Validate keys_subset
+        if not set(keys_subset).issubset(set(self.keys)):
+            raise ValueError(
+                f"keys_subset {keys_subset} must be subset of state keys {self.keys}"
+            )
+        
+        if len(keys_subset) == len(self.keys):
+            # Computing for all qubits anyway
+            return self._compute_density_matrix()
+        
+        # For subset, we need to trace out the other qubits
+        # This requires computing full density matrix then tracing out
+        full_dm = self._compute_density_matrix()
+        
+        # Determine which qubits to trace out
+        qubits_to_trace = [k for k in self.keys if k not in keys_subset]
+        
+        # Trace out unwanted qubits
+        reduced_dm = self._partial_trace(full_dm, self.keys, qubits_to_trace)
+        
+        return reduced_dm
+
+
+    def _partial_trace(self, density_matrix: np.ndarray, all_keys: List[int], 
+                    trace_out_keys: List[int]) -> np.ndarray:
+        """
+        Compute partial trace over specified qubits.
+        
+        Args:
+            density_matrix: Full density matrix
+            all_keys: All qubit keys in the density matrix
+            trace_out_keys: Which qubits to trace out
+        
+        Returns:
+            Reduced density matrix after tracing out specified qubits
+        """
+        # Get indices of qubits to keep
+        keep_indices = [all_keys.index(k) for k in all_keys if k not in trace_out_keys]
+        
+        n_qubits = len(all_keys)
+        n_keep = len(keep_indices)
+        
+        # Reshape density matrix to separate each qubit's dimension
+        shape = [2] * (2 * n_qubits)
+        dm_reshaped = density_matrix.reshape(shape)
+        
+        # Trace out unwanted qubits
+        for qubit_idx in sorted([all_keys.index(k) for k in trace_out_keys], reverse=True):
+            # Contract over this qubit's dimension
+            dm_reshaped = np.trace(dm_reshaped, axis1=qubit_idx, axis2=qubit_idx + n_qubits)
+            n_qubits -= 1
+        
+        # Reshape back to 2D matrix
+        dim = 2 ** n_keep
+        return dm_reshaped.reshape(dim, dim)
+    
     
     def copy(self):
         """Create a copy of this state."""

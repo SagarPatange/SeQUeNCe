@@ -60,12 +60,6 @@ def _set_state_with_fidelity(keys: list[int], desired_state: list[complex], fide
                        BSM._psi_plus, BSM._psi_minus]
     assert desired_state in possible_states
 
-    # CRITICAL FIX: Skip randomization when fidelity is perfect
-    if fidelity >= 1.0 - 1e-10:  # Account for floating point precision
-        log.logger.info(f"Perfect fidelity - directly setting desired state")
-        _set_pure_state(keys, desired_state, qm)
-        return
-
     # Only use randomization for imperfect fidelity
     if formalism == KET_STATE_FORMALISM:
         probabilities = [(1 - fidelity) / 3] * 4
@@ -86,17 +80,24 @@ def _set_state_with_fidelity(keys: list[int], desired_state: list[complex], fide
         log.logger.info(f"Stabilizer: fidelity={fidelity}, Werner state via DEPOLARIZE2")
         circuit = stim.Circuit()
         append_bell_state(circuit, desired_state, keys)
-        circuit.append("DEPOLARIZE2", [keys[0], keys[1]], (1-fidelity))
-        qm.set(keys, circuit)
+        circuit.append("DEPOLARIZE2", [keys[0], keys[1]], (1-fidelity))          
         
+        # # Group qubits if they're not already in the same entangled state
+        # if keys[0] in qm.states:
+        #     state = qm.states[keys[0]]
+        #     if len(state.keys) != 2 or keys[1] not in state.keys:
+        #         log.logger.info(f"BSM: Grouping qubits {keys} before setting Bell state")
+        #         qm.group_qubits(keys)
+                    
+        qm.set(keys, circuit)
     else:
         raise Exception("Invalid quantum manager with formalism {}".format(formalism))
 
 def _set_pure_state(keys: list[int], ket_state: list[complex], qm: "QuantumManager"):
     """Set a pure state, handling stabilizer formalism properly."""
-    
+
     formalism = qm.get_active_formalism()
-    
+
     if formalism == KET_STATE_FORMALISM:
         qm.set(keys, ket_state)
     elif formalism == DENSITY_MATRIX_FORMALISM:
@@ -104,28 +105,34 @@ def _set_pure_state(keys: list[int], ket_state: list[complex], qm: "QuantumManag
         qm.set(keys, state)
     ############## Changes #################
     elif formalism == STABILIZER_FORMALISM:
+        # qm.set() will automatically group qubits if needed
         qm.set(keys, ket_state)
+
     ########################################
     else:
         raise NotImplementedError(f"Unknown formalism: {formalism}")
 
+
 def _eq_psi_plus(state: "State", formalism: str):
+    
     if formalism == KET_STATE_FORMALISM:
         return array_equal(state.state, BSM._psi_plus)
     elif formalism == DENSITY_MATRIX_FORMALISM:
-        d_state = outer(BSM._psi_plus, BSM._psi_plus)
+        d_state = outer(BSM._phi_plus, BSM._psi_plus)
         return array_equal(state.state, d_state)
     
     ############## Changes #################
-    elif formalism == STABILIZER_FORMALISM:        
-        if hasattr(state, 'state') and isinstance(state.state, np.ndarray):
-            rho = state.state
+    elif formalism == STABILIZER_FORMALISM:  
+              
+        rho = state.compute_density_matrix(keys_subset = state.keys)
+        # if hasattr(state, 'state') and isinstance(state.state, np.ndarray):
+            # rho = state.state
             # Create ideal |ψ+⟩ density matrix
-            psi_plus = np.array([0, 1/np.sqrt(2), 1/np.sqrt(2), 0])
-            ideal_rho = np.outer(psi_plus, psi_plus.conj())
-            equal_dms = np.allclose(rho, ideal_rho, atol=0.1)
-            return equal_dms
-        return False
+        ideal_rho = outer(BSM._psi_plus, BSM._psi_plus)
+        equal_dms = np.allclose(rho, ideal_rho, atol=0.1)
+        return equal_dms
+
+        # return False
     #########################################
 
     else:
@@ -523,8 +530,16 @@ class SingleAtomBSM(BSM):
                     log.logger.info(self.name + " passed stage 1")
                     if detector_num == 0:
                         _set_pure_state(keys, BSM._psi_minus, qm)
+
                     else:
                         _set_pure_state(keys, BSM._psi_plus, qm)
+
+                    # CRITICAL FIX: Refresh state references after _set_pure_state
+                    # _set_pure_state calls qm.set() which may call group_qubits(),
+                    # which creates NEW state objects and replaces the old ones.
+                    # We must refresh our references to avoid stale state objects.
+                    state0, state1 = qm.get(key0), qm.get(key1)
+
                 elif len(state0.keys) == 2:
                     # if we're in stage 2: check if the same detector is triggered
                     # twice to assign state to psi+ or psi-

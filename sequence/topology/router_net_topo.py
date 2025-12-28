@@ -1,12 +1,12 @@
 import json
 import numpy as np
-from networkx import Graph, dijkstra_path, exception
+from networkx import Graph, dijkstra_path, single_source_dijkstra, exception
 
 from .topology import Topology as Topo
 from ..kernel.timeline import Timeline
 from ..kernel.quantum_manager import KET_STATE_FORMALISM, QuantumManager
 from .node import BSMNode, QuantumRouter, QuantumRouter2ndGeneration
-from ..constants import SPEED_OF_LIGHT
+from ..constants import SPEED_OF_LIGHT, MICROSECOND
 
 
 class RouterNetTopo(Topo):
@@ -49,9 +49,9 @@ class RouterNetTopo(Topo):
             config = json.load(fh)
 
         self._get_templates(config)
-        # quantum connections are only supported by sequential simulation so far
-        if not config[self.IS_PARALLEL]:
-            self._add_qconnections(config)
+        # # quantum connections are only supported by sequential simulation so far
+        # if not config[self.IS_PARALLEL]:
+        #     self._add_qconnections(config)
         self._add_timeline(config)
         self._map_bsm_routers(config)
         self._add_nodes(config)
@@ -219,81 +219,3 @@ class RouterNetTopo(Topo):
                     pass
 
 
-class RouterNetTopo2G(RouterNetTopo):
-    """Router Network Topology with 2nd Generation Quantum Router support.
-    
-    Extends RouterNetTopo to handle QuantumRouter2ndGeneration nodes.
-    The JSON config can specify "generation": 2 to create a 2nd gen router.
-    
-    JSON Example:
-        {
-            "nodes": [{
-                "name": "router_0",
-                "type": "QuantumRouter",
-                "generation": 2,  # This triggers 2nd gen creation
-                "memo_size": 7,
-                "data_memo_size": 7,     # Optional, defaults to 7
-                "ancilla_memo_size": 6,  # Optional, defaults to 6
-                ...
-            }]
-        }
-    """
-    
-    def _add_nodes(self, config: dict):
-        """Add nodes to the network topology.
-        
-        Overrides parent to handle QuantumRouter2ndGeneration creation.
-        Everything else remains the same.
-        """
-        # First pass: create all nodes, but check for 2nd gen routers BEFORE creation
-        for node in config[Topo.ALL_NODE]:
-            seed = node[Topo.SEED]
-            node_type = node[Topo.TYPE]
-            name = node[Topo.NAME]
-            template_name = node.get(Topo.TEMPLATE, None)
-            template = self.templates.get(template_name, {})
-
-            if node_type == self.BSM_NODE:
-                others = self.bsm_to_router_map[name]
-                node_obj = BSMNode(name, self.tl, others, seed=seed, component_templates=template)
-            elif node_type == self.QUANTUM_ROUTER:
-                # Check for 2nd generation BEFORE creating router
-                if node.get("generation") == 2:
-                    # Create 2nd generation router directly
-                    memo_size = node.get(self.MEMO_ARRAY_SIZE, 50)
-                    data_memo_size = node.get("data_memo_size", 7)
-                    ancilla_memo_size = node.get("ancilla_memo_size", 6)
-                    gate_fid = node.get(Topo.GATE_FIDELITY, 1.0)
-                    meas_fid = node.get(Topo.MEASUREMENT_FIDELITY, 1.0)
-                    
-                    node_obj = QuantumRouter2ndGeneration(
-                        name=name,
-                        timeline=self.tl,
-                        memo_size=memo_size,
-                        seed=seed,
-                        component_templates=template,
-                        gate_fid=gate_fid,
-                        meas_fid=meas_fid,
-                        data_memo_size=data_memo_size,
-                        ancilla_memo_size=ancilla_memo_size
-                    )
-                else:
-                    # Create standard QuantumRouter
-                    memo_size = node.get(self.MEMO_ARRAY_SIZE, 50)
-                    gate_fid = node.get(Topo.GATE_FIDELITY, 1.0)
-                    meas_fid = node.get(Topo.MEASUREMENT_FIDELITY, 1.0)
-                    
-                    node_obj = QuantumRouter(
-                        name=name,
-                        tl=self.tl,
-                        memo_size=memo_size,
-                        seed=seed,
-                        component_templates=template,
-                        gate_fid=gate_fid,
-                        meas_fid=meas_fid
-                    )
-            else:
-                raise ValueError("Unknown type of node '{}'".format(node_type))
-
-            node_obj.set_seed(seed)
-            self.nodes[node_type].append(node_obj)

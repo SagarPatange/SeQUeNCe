@@ -73,12 +73,12 @@ class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
         log.logger.info(f"[T:{self.owner.timeline.now():,}] {self.name} UPDATE round={self.ent_round}, bsm={self.bsm_res}")
 
         if self.ent_round == 1:
-            log.logger.info(f"[T:{self.owner.timeline.now():,}] Round 1 done")
+            # log.logger.info(f"[T:{self.owner.timeline.now():,}] Round 1 done")
             return True
 
         elif self.ent_round == 2 and self.bsm_res[0] != -1:
             self.owner.timeline.quantum_manager.run_circuit(self._flip_circuit, [self._qstate_key])
-            log.logger.info(f"[T:{self.owner.timeline.now():,}] Round 2 done")
+            log.logger.info(f"[T:{self.owner.timeline.now():,}] Round 1 done")
             return True
 
         elif self.ent_round == 3 and self.bsm_res[1] != -1:
@@ -279,24 +279,8 @@ class BarretKokB(EntanglementGenerationB):
 class BarretKokStabilizerA(BarretKokA):
     """Barrett-Kok protocol adapted for stabilizer formalism."""
     
-    def emit_event(self) -> None:
-        """Override to use Stim circuits for state preparation."""
-        if self.ent_round == 1:
-            # Prepare |+⟩ state using Stim
-            qm = self.owner.timeline.quantum_manager
-            key = self.memory.qstate_key
-        
-            # Reset to |0⟩
-            qm.states[key].circuit = stim.Circuit()
-            # Apply H to get |+⟩
-            qm.states[key].circuit.append("H", [key])
-            qm.states[key].state = qm.states[key]._compute_density_matrix()
-
-        
-        self.memory.excite(self.middle)
-    
     def update_memory(self) -> bool | None:
-        """Override to use Stim circuits for gate operations."""
+        """Override to use run_circuit for all gate operations."""
         if self not in self.owner.protocols:
             return
 
@@ -308,30 +292,18 @@ class BarretKokStabilizerA(BarretKokA):
             return True
 
         elif self.ent_round == 2 and self.bsm_res[0] != -1:
-            # Apply X gate using Stim
-            if hasattr(qm.states[key], 'circuit'):
-                qm.states[key].circuit.append("X", [key])
-                qm.states[key].state = qm.states[key]._compute_density_matrix()
-            else:
-                qm.run_circuit(self._flip_circuit, [key])
+            # Apply X gate using run_circuit
+            # qm.set(self._flip_circuit, [key])
+            qm.run_circuit(self._flip_circuit, [key])
             return True
 
         elif self.ent_round == 3 and self.bsm_res[1] != -1:
-            # Apply corrections
+            # Apply corrections using run_circuit
             if self.primary:
-                if hasattr(qm.states[key], 'circuit'):
-                    qm.states[key].circuit.append("X", [key])
-                    qm.states[key].state = qm.states[key]._compute_density_matrix()
-                else:
-                    qm.run_circuit(self._flip_circuit, [key])
-                    
+                qm.run_circuit(self._flip_circuit, [key])
             elif self.bsm_res[0] != self.bsm_res[1]:
-                if hasattr(qm.states[key], 'circuit'):
-                    qm.states[key].circuit.append("Z", [key])
-                    qm.states[key].state = qm.states[key]._compute_density_matrix()
-                else:
-                    qm.run_circuit(self._z_circuit, [key])
-            
+                qm.run_circuit(self._z_circuit, [key])
+
             self._entanglement_succeed()
             return True
         else:
