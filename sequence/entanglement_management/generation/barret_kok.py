@@ -312,3 +312,7 @@ class BarretKokStabilizerA(BarretKokA):
 
 # Register existing B class for stabilizer name
 EntanglementGenerationB.register('barret_kok_stabilizer', BarretKokB)
+
+EntanglementGenerationA.register('barret_kok_tableau', BarretKokStabilizerA)
+
+EntanglementGenerationB.register('barret_kok_tableau', BarretKokB)

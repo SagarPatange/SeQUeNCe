@@ -857,6 +857,8 @@ class QuantumManagerStabilizer(QuantumManager):
         self.base_seed = seed
         self.rng = np.random.default_rng(seed) if seed is not None else None
         self._seed_counter = 0
+        self.gate_fid = 1.0            # single-qubit gate fidelity (1.0 = no noise)
+        self.two_qubit_gate_fid = 1.0  # two-qubit gate fidelity (1.0 = no noise)
     
     
     def _get_next_seed(self) -> Optional[int]:
@@ -865,6 +867,19 @@ class QuantumManagerStabilizer(QuantumManager):
             return None
         self._seed_counter += 1
         return self.rng.integers(0, 2**31)
+    
+    def calculate_dm_from_circuit(self, circuit: stim.Circuit, keys: List[int]) -> np.ndarray:
+        """Calculate the density matrix from the circuit for the given keys."""
+        # Create a tableau simulator with a unique seed for deterministic behavior
+        seed = self._get_next_seed()
+        tableau = stim.TableauSimulator(seed=seed)
+        tableau.do(circuit)
+        
+        # Extract the density matrix for the specified keys
+        # Note: Stim does not directly provide density matrices, so we will use the tableau to simulate measurements
+        # and reconstruct the state. For simplicity, we will return the tableau's internal state as a placeholder.
+        # In a full implementation, you would convert the tableau to a density matrix representation.
+        pass
     
     
     def new(self, state: Optional[stim.Circuit] = None) -> int:
@@ -907,21 +922,20 @@ class QuantumManagerStabilizer(QuantumManager):
         return key
     
     
-    def run_circuit(self, circuit, keys: List[int], meas_samp=None, compute_dm: bool = True) -> Dict[int, int]:
+    def run_circuit(self, circuit, keys: List[int], meas_samp=None) -> Dict[int, int]:
         """
         Run a circuit on specified qubits with proper measurement collapse.
-        
+
         Behavior matches KetState formalism:
         - Measurements collapse the state
         - Measured qubits are SEPARATED from entangled group
         - Measured qubits get independent collapsed state (|0> or |1>)
         - Remaining qubits get post-measurement state
-        
+
         Args:
             circuit: stim.Circuit or SeQUeNCe Circuit to apply
             keys: Keys of qubits that circuit positions map to
             meas_samp: Random sample [0,1] for measurement determinism (seeds the tableau)
-            compute_dm: Whether to recompute density matrix (default True)
         
         Returns:
             Dictionary mapping qubit keys to measurement results
@@ -977,7 +991,13 @@ class QuantumManagerStabilizer(QuantumManager):
                 state.circuit.append(gate_name, mapped_targets, *gate_args)
             else:
                 state.circuit.append(gate_name, mapped_targets)
-            
+
+            # Inject gate depolarization noise if fidelity < 1.0
+            if gate_name in ('H', 'X', 'Y', 'Z', 'S', 'S_DAG', 'T') and self.gate_fid < 1.0:
+                state.circuit.append('DEPOLARIZE1', mapped_targets, 1 - self.gate_fid)
+            elif gate_name in ('CX', 'CZ') and self.two_qubit_gate_fid < 1.0:
+                state.circuit.append('DEPOLARIZE2', mapped_targets, 1 - self.two_qubit_gate_fid)
+
             # Invalidate tableau since circuit changed
             state._tableau = None
         
@@ -1052,15 +1072,294 @@ class QuantumManagerStabilizer(QuantumManager):
                     new_state._tableau = shared_tableau
                     self.states[key] = new_state
         
-        # Optionally recompute density matrix (only if no measurements)
-        if compute_dm and not measurement_qubits:
-            state = self.states[keys[0]]
-            full_dm = state.compute_density_matrix(keys_subset=None)
-            for key in state.keys:
-                self.states[key].set_density_matrix(full_dm)
-        
         return measurement_results
-    
+
+    def _map_stim_targets_preserve_records(self, targets: list, keys: List[int]) -> list:
+        """Map only qubit targets from local circuit indices to actual qstate keys.
+
+        Non-qubit Stim targets such as rec[-k], sweep bits, and combiners must be
+        preserved exactly for detector conversion to remain valid.
+        """
+        mapped = []
+        for target in targets:
+            if hasattr(target, "is_qubit_target") and target.is_qubit_target:
+                idx = target.value
+                if idx < 0:
+                    raise ValueError(f"Unexpected negative qubit target index: {idx}")
+                mapped.append(keys[idx] if idx < len(keys) else idx)
+            else:
+                mapped.append(target)
+        return mapped
+
+    def _count_stim_measurements(self, circuit: stim.Circuit) -> int:
+        count = 0
+        for inst in circuit:
+            if inst.name == "M":
+                count += sum(1 for t in inst.targets_copy() if getattr(t, "is_qubit_target", False))
+        return count
+
+    def _postselect_z_measurement_compat(
+        self,
+        tableau: stim.TableauSimulator,
+        qubit_key: int,
+        desired: int,
+    ) -> int:
+        """Force a Z-basis measurement outcome when the Stim API supports it."""
+        desired = int(desired)
+
+        for method_name in ("postselect_z",):
+            method = getattr(tableau, method_name, None)
+            if method is None:
+                continue
+            try:
+                method(qubit_key, desired)
+                return desired
+            except TypeError:
+                try:
+                    method(qubit_key, desired_value=desired)
+                    return desired
+                except TypeError:
+                    pass
+
+        actual = int(tableau.measure(qubit_key))
+        if actual != desired:
+            raise RuntimeError(
+                "Unable to force sampled measurement outcome on tableau state. "
+                "This Stim build does not appear to expose a compatible postselect_z API."
+            )
+        return actual
+
+    def _commit_sampled_stim_circuit(
+        self,
+        stim_circuit: stim.Circuit,
+        keys: List[int],
+        measurement_bits: np.ndarray,
+    ) -> Dict[int, int]:
+        """Commit a sampled single-shot circuit branch into manager state.
+
+        This currently supports standard Z-basis M measurements and assumes the
+        appended circuit itself does not rely on probabilistic noise channels.
+        """
+        if not keys:
+            return {}
+
+        if len(keys) > 1:
+            self.group_qubits(keys)
+
+        state = self.states[keys[0]]
+        shared_circuit = state.circuit.copy()
+        shared_tableau = state.tableau
+
+        measurement_results: Dict[int, int] = {}
+        measurement_qubits: List[int] = []
+        measurement_index = 0
+
+        for inst in stim_circuit:
+            mapped_targets = self._map_stim_targets_preserve_records(inst.targets_copy(), keys)
+            gate_args = inst.gate_args_copy()
+
+            if inst.name in ("DETECTOR", "OBSERVABLE_INCLUDE"):
+                continue
+
+            if inst.name == "M":
+                for target in mapped_targets:
+                    if not isinstance(target, int):
+                        continue
+                    if measurement_index >= len(measurement_bits):
+                        raise ValueError("Insufficient sampled measurement bits for commit.")
+                    outcome = self._postselect_z_measurement_compat(
+                        shared_tableau,
+                        target,
+                        int(measurement_bits[measurement_index]),
+                    )
+                    measurement_index += 1
+                    measurement_results[target] = outcome
+                    measurement_qubits.append(target)
+                    shared_circuit.append("M", [target])
+                    shared_circuit.append("R", [target])
+                    if outcome == 1:
+                        shared_circuit.append("X", [target])
+                continue
+
+            if inst.name in ("MX", "MY", "MR", "MRX", "MRY", "MRZ"):
+                raise NotImplementedError(
+                    f"Commit mode does not yet support measurement instruction {inst.name}."
+                )
+
+            if gate_args:
+                shared_circuit.append(inst.name, mapped_targets, gate_args)
+                temp = stim.Circuit()
+                temp.append(inst.name, mapped_targets, gate_args)
+            else:
+                shared_circuit.append(inst.name, mapped_targets)
+                temp = stim.Circuit()
+                temp.append(inst.name, mapped_targets)
+
+            # Exact branch commit is incompatible with additional sampled noise here.
+            if inst.name in ('H', 'X', 'Y', 'Z', 'S', 'S_DAG', 'T') and self.gate_fid < 1.0:
+                raise NotImplementedError(
+                    "commit=True is not implemented for sampled single-qubit gate noise."
+                )
+            elif inst.name in ('CX', 'CZ') and self.two_qubit_gate_fid < 1.0:
+                raise NotImplementedError(
+                    "commit=True is not implemented for sampled two-qubit gate noise."
+                )
+
+            if len(temp) > 0:
+                shared_tableau.do(temp)
+
+        remaining_keys = [k for k in state.keys if k not in measurement_qubits]
+
+        for qubit_key in measurement_qubits:
+            outcome = measurement_results[qubit_key]
+            collapsed_circuit = stim.Circuit()
+            if outcome == 1:
+                collapsed_circuit.append("X", [qubit_key])
+            self.states[qubit_key] = StabilizerState(
+                original_key=qubit_key,
+                keys=[qubit_key],
+                circuit=collapsed_circuit,
+                shots=self.shots,
+                truncation=self.truncation,
+                base_seed=self.base_seed,
+            )
+
+        if remaining_keys:
+            for key in remaining_keys:
+                new_state = StabilizerState(
+                    original_key=key,
+                    keys=remaining_keys.copy(),
+                    circuit=shared_circuit,
+                    shots=self.shots,
+                    truncation=self.truncation,
+                    base_seed=self.base_seed,
+                )
+                new_state._tableau = shared_tableau
+                self.states[key] = new_state
+
+        return measurement_results
+
+    def run_circuit_with_events(
+        self,
+        circuit,
+        keys: List[int],
+        shots: int = 1,
+        seed: Optional[int] = None,
+        append_observables: bool = False,
+        commit: bool = False,
+    ) -> Dict[str, Any]:
+        """Sample same-shot measurements and detector events for a circuit.
+
+        This method is additive and does not replace run_circuit(). It is intended
+        for FT verification and postselection workflows that need detector-safe
+        handling of rec[-k] targets.
+
+        Important:
+        - The returned events are sampled from the current state circuit prefix plus
+          the provided circuit.
+        - This method does not perform measurement collapse/separation updates on
+          the manager state. Legacy state evolution remains in run_circuit().
+        """
+        if isinstance(circuit, stim.Circuit):
+            stim_circuit = circuit
+        elif hasattr(circuit, 'gates') and hasattr(circuit, 'measured_qubits'):
+            stim_circuit = self._sequence_to_stim(circuit, keys)
+        else:
+            raise TypeError(f"circuit must be stim.Circuit or SeQUeNCe Circuit, got {type(circuit)}")
+
+        if not keys:
+            empty = np.zeros((shots, 0), dtype=np.bool_)
+            return {
+                "measurements": empty,
+                "detectors": empty,
+                "observables": empty,
+                "mapped_circuit": stim.Circuit(),
+            }
+
+        if len(keys) > 1:
+            self.group_qubits(keys)
+
+        state = self.states[keys[0]]
+        mapped = state.circuit.copy() if state.circuit is not None else stim.Circuit()
+
+        for inst in stim_circuit:
+            mapped_targets = self._map_stim_targets_preserve_records(inst.targets_copy(), keys)
+            gate_args = inst.gate_args_copy()
+            if gate_args:
+                mapped.append(inst.name, mapped_targets, gate_args)
+            else:
+                mapped.append(inst.name, mapped_targets)
+
+            # Mirror the existing run_circuit noise model on appended gates.
+            if inst.name in ('H', 'X', 'Y', 'Z', 'S', 'S_DAG', 'T') and self.gate_fid < 1.0:
+                mapped.append('DEPOLARIZE1', mapped_targets, 1 - self.gate_fid)
+            elif inst.name in ('CX', 'CZ') and self.two_qubit_gate_fid < 1.0:
+                mapped.append('DEPOLARIZE2', mapped_targets, 1 - self.two_qubit_gate_fid)
+
+        sampler = mapped.compile_sampler(seed=seed)
+        measurements = sampler.sample(shots=shots)
+
+        detectors = None
+        observables = None
+
+        if hasattr(mapped, "compile_m2d_converter"):
+            conv = mapped.compile_m2d_converter()
+            converted = None
+            try:
+                converted = conv.convert(
+                    measurements=measurements,
+                    append_observables=append_observables,
+                )
+            except TypeError:
+                try:
+                    converted = conv.convert(
+                        measurements=measurements,
+                        separate_observables=append_observables,
+                    )
+                except TypeError:
+                    converted = conv.convert(measurements)
+            except ValueError:
+                try:
+                    converted = conv.convert(
+                        measurements=measurements,
+                        append_observables=append_observables,
+                    )
+                except Exception:
+                    converted = conv.convert(measurements)
+
+            if isinstance(converted, tuple):
+                if len(converted) > 0:
+                    detectors = converted[0]
+                if len(converted) > 1:
+                    observables = converted[1]
+            else:
+                detectors = converted
+                if append_observables and hasattr(mapped, "num_detectors"):
+                    nd = mapped.num_detectors
+                    if detectors is not None and detectors.shape[1] >= nd:
+                        observables = detectors[:, nd:]
+                        detectors = detectors[:, :nd]
+
+        result = {
+            "measurements": measurements,
+            "detectors": detectors,
+            "observables": observables,
+            "mapped_circuit": mapped,
+        }
+
+        if commit:
+            if shots != 1:
+                raise ValueError("commit=True currently requires shots=1.")
+            prefix_measurements = self._count_stim_measurements(state.circuit)
+            appended_measurements = measurements[0, prefix_measurements:]
+            result["measurement_results"] = self._commit_sampled_stim_circuit(
+                stim_circuit,
+                keys,
+                appended_measurements,
+            )
+
+        return result
+
     
     def _sequence_to_stim(self, circuit, keys: List[int]) -> stim.Circuit:
         """Convert SeQUeNCe Circuit to Stim Circuit."""
@@ -1184,7 +1483,7 @@ class QuantumManagerStabilizer(QuantumManager):
         )
      
      
-    def set(self, keys: List[int], amplitudes_or_circuit: Union[List[complex], stim.Circuit], compute_dm: bool = True) -> None:
+    def set(self, keys: List[int], amplitudes_or_circuit: Union[List[complex], stim.Circuit]) -> None:
         """
         Set qubits to a state specified by amplitudes or a Stim circuit.
         
@@ -1202,7 +1501,6 @@ class QuantumManagerStabilizer(QuantumManager):
         Args:
             keys: List of qubit keys to set
             amplitudes_or_circuit: Either list of amplitudes or stim.Circuit
-            compute_dm: Whether to recompute density matrix (default True)
         """
         
         # Convert amplitudes to circuit if needed
@@ -1305,18 +1603,6 @@ class QuantumManagerStabilizer(QuantumManager):
                 self.states[key].keys = sorted(keys)
                 self.states[key]._tableau = None
         
-        # Step 6: Optionally recompute density matrix
-        if compute_dm:
-            # Compute full system density matrix
-            full_dm = state.compute_density_matrix(keys_subset=None)
-            
-            # Update ALL qubits that share this circuit
-            for key in keys:
-                if key in self.states:
-                    qubit_state = self.states[key]
-                    qubit_state.set_density_matrix(full_dm)
-            
-            
     def get_density_matrix(self, key: int) -> np.ndarray:
         """
         Get the density matrix for a single qubit on-demand.

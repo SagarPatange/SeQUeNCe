@@ -24,7 +24,7 @@ from .photon import Photon
 from ..kernel.entity import Entity
 from ..kernel.event import Event
 from ..kernel.process import Process
-from ..constants import KET_STATE_FORMALISM, DENSITY_MATRIX_FORMALISM, STABILIZER_FORMALISM
+from ..constants import KET_STATE_FORMALISM, DENSITY_MATRIX_FORMALISM, STABILIZER_FORMALISM, TABLEAU_FORMALISM
 from ..utils.encoding import *
 from ..utils import log
 
@@ -81,15 +81,14 @@ def _set_state_with_fidelity(keys: list[int], desired_state: list[complex], fide
         circuit = stim.Circuit()
         append_bell_state(circuit, desired_state, keys)
         circuit.append("DEPOLARIZE2", [keys[0], keys[1]], (1-fidelity))          
-        
-        # # Group qubits if they're not already in the same entangled state
-        # if keys[0] in qm.states:
-        #     state = qm.states[keys[0]]
-        #     if len(state.keys) != 2 or keys[1] not in state.keys:
-        #         log.logger.info(f"BSM: Grouping qubits {keys} before setting Bell state")
-        #         qm.group_qubits(keys)
-                    
         qm.set(keys, circuit)
+    elif formalism == TABLEAU_FORMALISM:
+        fidelity = float(max(0.0, min(1.0, fidelity)))
+        probabilities = [(1 - fidelity) / 3] * 4
+        probabilities[possible_states.index(desired_state)] = fidelity
+        state_ind = rng.choice(4, p=probabilities)
+        qm.set(keys, possible_states[state_ind])
+
     else:
         raise Exception("Invalid quantum manager with formalism {}".format(formalism))
 
@@ -103,12 +102,11 @@ def _set_pure_state(keys: list[int], ket_state: list[complex], qm: "QuantumManag
     elif formalism == DENSITY_MATRIX_FORMALISM:
         state = outer(ket_state, ket_state)
         qm.set(keys, state)
-    ############## Changes #################
     elif formalism == STABILIZER_FORMALISM:
-        # qm.set() will automatically group qubits if needed
+        qm.set(keys, ket_state)
+    elif formalism == TABLEAU_FORMALISM:
         qm.set(keys, ket_state)
 
-    ########################################
     else:
         raise NotImplementedError(f"Unknown formalism: {formalism}")
 
@@ -120,8 +118,6 @@ def _eq_psi_plus(state: "State", formalism: str):
     elif formalism == DENSITY_MATRIX_FORMALISM:
         d_state = outer(BSM._phi_plus, BSM._psi_plus)
         return array_equal(state.state, d_state)
-    
-    ############## Changes #################
     elif formalism == STABILIZER_FORMALISM:  
               
         rho = state.compute_density_matrix(keys_subset = state.keys)
@@ -131,9 +127,16 @@ def _eq_psi_plus(state: "State", formalism: str):
         ideal_rho = outer(BSM._psi_plus, BSM._psi_plus)
         equal_dms = np.allclose(rho, ideal_rho, atol=0.1)
         return equal_dms
+    elif formalism == TABLEAU_FORMALISM:
+        # TableauState -> tableau -> state vector -> compare with |psi+>.
+        target = np.array(BSM._psi_plus, dtype=complex)
+        vec = np.array(state.current_tableau().to_state_vector(endian="little"), dtype=complex)
+        return np.allclose(vec, target) or np.allclose(vec, -target)
 
-        # return False
-    #########################################
+
+        raise TypeError("TABLEAU formalism expected TableauState-like object.")
+
+
 
     else:
         raise NotImplementedError("formalism of quantum state {} is not "

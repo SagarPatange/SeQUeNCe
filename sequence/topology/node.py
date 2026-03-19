@@ -896,9 +896,11 @@ class QuantumRouter2ndGeneration(QuantumRouter):
         data_memo_arr_name (str): name of the data memory array.
         ancilla_memo_arr_name (str): name of the ancilla memory array.
     """
-    def __init__(self, name: str, timeline: "Timeline", memo_size: int = 1, seed: int = None, component_templates: dict = {}, 
-                 gate_fid: float = 1, meas_fid: float = 1, data_memo_size: int = 1, ancilla_memo_size: int = 1) :
+    def __init__(self, name: str, timeline: "Timeline", memo_size: int = 1, seed: int = None, component_templates: dict = {},
+                 gate_fid: float = 1, meas_fid: float = 1, two_qubit_gate_fid: float = 1,
+                 data_memo_size: int = 1, ancilla_memo_size: int = 1):
         super().__init__(name, timeline, memo_size, seed, component_templates, gate_fid, meas_fid)
+        self.two_qubit_gate_fid = two_qubit_gate_fid
         # your data qubits
         self.data_memo_arr_name = f"{name}.DataMemoryArray"
         data_memo_arr_args = component_templates.get("DataMemoryArray", {})  # Keep the same 

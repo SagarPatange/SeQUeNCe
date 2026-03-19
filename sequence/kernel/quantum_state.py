@@ -461,7 +461,7 @@ class StabilizerState(State):
             "Load from a custom stabilizer/circuit schema instead.")
        
         
-    def set(self, quantum_manager, circuit: stim.Circuit, sampled_keys: list[int] = None, compute_dm: bool = True):
+    def set(self, quantum_manager, circuit: stim.Circuit, sampled_keys: list[int] = None):
         """
         Set state from a circuit by creating a fresh circuit that resets specified qubits.
         
@@ -556,10 +556,6 @@ class StabilizerState(State):
         # Step 5: Invalidate cached tableau
         self._tableau = None
         
-        # Step 6: Optionally recompute density matrix
-        if compute_dm:
-            self.state = self._compute_density_matrix()
-   
     
     def _compute_density_matrix(self) -> np.ndarray:
         """Compute density matrix via Pauli tomography using compiled samplers."""
