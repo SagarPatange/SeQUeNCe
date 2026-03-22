@@ -21,7 +21,6 @@ from ..constants import EPSILON
 from stim import TableauSimulator, Tableau
 
 
-
 def swap_bits(num, pos1, pos2):
     """Swaps bits in num at positions 1 and 2.
 
