@@ -926,6 +926,8 @@ class QuantumRouter2ndGeneration(QuantumRouter):
             self.network_manager.received_message(src, msg)
         elif msg.receiver == "resource_manager":
             self.resource_manager.received_message(src, msg)
+        elif msg.receiver == "request_logical_pair_app":
+            self.request_logical_pair_app.received_message(src, msg)
         else:
             if msg.receiver is None:  # the msg sent by EntanglementGenerationB doesn't have a receiver (EGA & EGB not paired)
                 matching = [p for p in self.protocols if p.protocol_type == msg.protocol_type]
@@ -936,4 +938,3 @@ class QuantumRouter2ndGeneration(QuantumRouter):
                     if protocol.name == msg.receiver:
                         protocol.received_message(src, msg)
                         break
-

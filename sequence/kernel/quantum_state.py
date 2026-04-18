@@ -160,15 +160,13 @@ class DensityState(State):
             "Length of amplitudes should be d ** n, " \
             "where d is subsystem Hilbert space dimension and n is the number of subsystems. " \
             "Actual amplitude length: {}, dim: {}, num subsystems: {}".format(
-                len(state), dim, num_subsystems
-            )
+                len(state), dim, num_subsystems)
         num_subsystems = int(round(num_subsystems))
         assert num_subsystems == len(keys), \
             "Length of amplitudes should be d ** n, " \
             "where d is subsystem Hilbert space dimension and n is the number of subsystems. " \
             "Amplitude length: {}, expected subsystems: {}, num keys: {}".format(
-                len(state), num_subsystems, len(keys)
-            )
+                len(state), num_subsystems, len(keys))
 
         self.state = state
         self.keys = keys
@@ -245,15 +243,11 @@ class FreeQuantumState(State):
         num_qubits = log2(len(state))
         assert 2 ** int(round(num_qubits)) == len(state), \
             "Length of amplitudes should be 2 ** n, where n is the number of qubits. " \
-            "Actual amplitude length: {}, num qubits: {}".format(
-                len(state), num_qubits
-            )
+            "Actual amplitude length: {}, num qubits: {}".format(len(state), num_qubits)
         num_qubits = int(round(num_qubits))
         assert num_qubits == len(self.entangled_states), \
             "Length of amplitudes should be 2 ** n, where n is the number of qubits. " \
-            "Num qubits in state: {}, num qubits in object: {}".format(
-                num_qubits, len(self.entangled_states)
-            )
+            "Num qubits in state: {}, num qubits in object: {}".format(num_qubits, len(self.entangled_states))
 
         for qs in self.entangled_states:
             qs.state = state
@@ -415,388 +409,388 @@ class BellDiagonalState(State):
         self.keys = keys
 
 
-class StabilizerState(State):
-    """
-    Stabilizer state with density matrix representation via Pauli tomography.
-    Uses compiled samplers for efficiency and maintains a tableau for exact operations.
-    """
-    def __init__(self, original_key: int, keys: list[int], circuit: stim.Circuit = None, 
-                shots: int = 1000, truncation: int = 1, base_seed: int = None):
-        super().__init__()
-        self.original_key = original_key
-        self.keys = list(keys)
+# class StabilizerState(State):
+#     """
+#     Stabilizer state with density matrix representation via Pauli tomography.
+#     Uses compiled samplers for efficiency and maintains a tableau for exact operations.
+#     """
+#     def __init__(self, original_key: int, keys: list[int], circuit: stim.Circuit = None, 
+#                 shots: int = 1000, truncation: int = 1, base_seed: int = None):
+#         super().__init__()
+#         self.original_key = original_key
+#         self.keys = list(keys)
         
-        # Validate that original_key is in keys
-        if self.original_key not in self.keys:
-            raise ValueError(f"original_key {self.original_key} must be in keys {self.keys}")
-        self.circuit = circuit if circuit is not None else stim.Circuit()
-        self.shots = int(shots)
-        self.truncation = truncation
-        self.base_seed = base_seed  # Keep this for deterministic seeding
-        self.rng = None  # Don't create RNG here
-        self._tableau = None
+#         # Validate that original_key is in keys
+#         if self.original_key not in self.keys:
+#             raise ValueError(f"original_key {self.original_key} must be in keys {self.keys}")
+#         self.circuit = circuit if circuit is not None else stim.Circuit()
+#         self.shots = int(shots)
+#         self.truncation = truncation
+#         self.base_seed = base_seed  # Keep this for deterministic seeding
+#         self.rng = None  # Don't create RNG here
+#         self._tableau = None
         
-        # Compute density matrix without extra RNG calls
-        self.state = None
+#         # Compute density matrix without extra RNG calls
+#         self.state = None
     
-    @property
-    def tableau(self) -> stim.TableauSimulator:
-        """Get tableau simulator, creating it lazily if needed."""
-        if self._tableau is None:
-            self._tableau = stim.TableauSimulator()
-            if self.circuit and len(self.circuit) > 0:
-                self._tableau.do(self.circuit)
-        return self._tableau
+#     @property
+#     def tableau(self) -> stim.TableauSimulator:
+#         """Get tableau simulator, creating it lazily if needed."""
+#         if self._tableau is None:
+#             self._tableau = stim.TableauSimulator()
+#             if self.circuit and len(self.circuit) > 0:
+#                 self._tableau.do(self.circuit)
+#         return self._tableau
     
     
-    def serialize(self) -> dict:
-        """Not supported for StabilizerState."""
-        raise NotImplementedError(
-            "StabilizerState cannot use the base complex-vector serialization. "
-            "Persist with a custom stabilizer/circuit schema instead.")
+#     def serialize(self) -> dict:
+#         """Not supported for StabilizerState."""
+#         raise NotImplementedError(
+#             "StabilizerState cannot use the base complex-vector serialization. "
+#             "Persist with a custom stabilizer/circuit schema instead.")
      
         
-    def deserialize(self) -> None:
-        """Not supported for StabilizerState."""
-        raise NotImplementedError(
-            "StabilizerState cannot be deserialized from the base complex-vector format. "
-            "Load from a custom stabilizer/circuit schema instead.")
+#     def deserialize(self) -> None:
+#         """Not supported for StabilizerState."""
+#         raise NotImplementedError(
+#             "StabilizerState cannot be deserialized from the base complex-vector format. "
+#             "Load from a custom stabilizer/circuit schema instead.")
        
         
-    def set(self, quantum_manager, circuit: stim.Circuit, sampled_keys: list[int] = None):
-        """
-        Set state from a circuit by creating a fresh circuit that resets specified qubits.
+#     def set(self, quantum_manager, circuit: stim.Circuit, sampled_keys: list[int] = None):
+#         """
+#         Set state from a circuit by creating a fresh circuit that resets specified qubits.
         
-        BEHAVIOR: Creates completely new circuit (replaces old one) instead of appending.
-        Detects subset setting and ungroups other qubits to maintain consistency.
-        """
-        # Validation 1: sampled_keys cannot be None
-        if sampled_keys is None:
-            raise ValueError("sampled_keys cannot be None")
+#         BEHAVIOR: Creates completely new circuit (replaces old one) instead of appending.
+#         Detects subset setting and ungroups other qubits to maintain consistency.
+#         """
+#         # Validation 1: sampled_keys cannot be None
+#         if sampled_keys is None:
+#             raise ValueError("sampled_keys cannot be None")
         
-        # Validation 2: Extract which qubits the circuit operates on
-        circuit_qubits = set()
-        for instruction in circuit:
-            for target in instruction.targets_copy():
-                circuit_qubits.add(target.value)
+#         # Validation 2: Extract which qubits the circuit operates on
+#         circuit_qubits = set()
+#         for instruction in circuit:
+#             for target in instruction.targets_copy():
+#                 circuit_qubits.add(target.value)
         
-        # Validation 3: Circuit must operate on subset of sampled_keys
-        if not circuit_qubits.issubset(set(sampled_keys)):
-            raise ValueError(
-                f"Circuit operates on qubits {sorted(circuit_qubits)} "
-                f"but sampled_keys only includes {sampled_keys}. "
-                f"Circuit qubits must be subset of sampled_keys."
-            )
+#         # Validation 3: Circuit must operate on subset of sampled_keys
+#         if not circuit_qubits.issubset(set(sampled_keys)):
+#             raise ValueError(
+#                 f"Circuit operates on qubits {sorted(circuit_qubits)} "
+#                 f"but sampled_keys only includes {sampled_keys}. "
+#                 f"Circuit qubits must be subset of sampled_keys."
+#             )
         
-        # Validation 4: original_key must remain in keys (keys never change)
-        if self.original_key not in self.keys:
-            raise ValueError(
-                f"original_key={self.original_key} must be in keys={self.keys}"
-            )
+#         # Validation 4: original_key must remain in keys (keys never change)
+#         if self.original_key not in self.keys:
+#             raise ValueError(
+#                 f"original_key={self.original_key} must be in keys={self.keys}"
+#             )
         
-        # Validation 5: sampled_keys must be subset of current keys
-        if not set(sampled_keys).issubset(set(self.keys)):
-            raise ValueError(
-                f"sampled_keys {sampled_keys} must be subset of current keys {self.keys}"
-            )
+#         # Validation 5: sampled_keys must be subset of current keys
+#         if not set(sampled_keys).issubset(set(self.keys)):
+#             raise ValueError(
+#                 f"sampled_keys {sampled_keys} must be subset of current keys {self.keys}"
+#             )
         
-        # ============================================================================
-        # CRITICAL FIX: Check if we're setting a SUBSET of grouped qubits
-        # If yes, ungroup the other qubits first to maintain consistency
-        # ============================================================================
-        if set(sampled_keys) != set(self.keys):
-            # We're setting a subset - need to ungroup the other qubits first
-            # This prevents inconsistent state where circuit doesn't match keys
+#         # ============================================================================
+#         # CRITICAL FIX: Check if we're setting a SUBSET of grouped qubits
+#         # If yes, ungroup the other qubits first to maintain consistency
+#         # ============================================================================
+#         if set(sampled_keys) != set(self.keys):
+#             # We're setting a subset - need to ungroup the other qubits first
+#             # This prevents inconsistent state where circuit doesn't match keys
             
-            for key in self.keys:
-                if key not in sampled_keys:
-                    # This qubit is NOT being set - give it its own circuit
-                    other_state = quantum_manager.states[key]
+#             for key in self.keys:
+#                 if key not in sampled_keys:
+#                     # This qubit is NOT being set - give it its own circuit
+#                     other_state = quantum_manager.states[key]
                     
-                    # Create a fresh circuit for this qubit (reset to |0⟩)
-                    other_circuit = stim.Circuit()
-                    other_circuit.append("R", [key])
+#                     # Create a fresh circuit for this qubit (reset to |0⟩)
+#                     other_circuit = stim.Circuit()
+#                     other_circuit.append("R", [key])
                     
-                    # Assign new circuit and update keys to be solo
-                    other_state.circuit = other_circuit
-                    other_state.keys = [key]
-                    other_state._tableau = None
+#                     # Assign new circuit and update keys to be solo
+#                     other_state.circuit = other_circuit
+#                     other_state.keys = [key]
+#                     other_state._tableau = None
             
-            # Update self.keys to only include sampled_keys
-            self.keys = sorted(sampled_keys)
+#             # Update self.keys to only include sampled_keys
+#             self.keys = sorted(sampled_keys)
         
-        # Step 1: Check if all sampled_keys share the same circuit, if not, group them
-        states_to_check = [quantum_manager.states[k] for k in sampled_keys if k in quantum_manager.states]
-        if len(states_to_check) > 1 and not all(s.circuit is states_to_check[0].circuit for s in states_to_check):
-            # Need to group these qubits first
-            quantum_manager.group_qubits(sampled_keys)
+#         # Step 1: Check if all sampled_keys share the same circuit, if not, group them
+#         states_to_check = [quantum_manager.states[k] for k in sampled_keys if k in quantum_manager.states]
+#         if len(states_to_check) > 1 and not all(s.circuit is states_to_check[0].circuit for s in states_to_check):
+#             # Need to group these qubits first
+#             quantum_manager.group_qubits(sampled_keys)
         
-        # Step 2: Create FRESH circuit that completely replaces the old one
-        new_circuit = stim.Circuit()
+#         # Step 2: Create FRESH circuit that completely replaces the old one
+#         new_circuit = stim.Circuit()
         
-        # Add reset gates for sampled qubits (deduplicated)
-        unique_keys = sorted(set(sampled_keys))
-        if unique_keys:
-            new_circuit.append("R", unique_keys)
+#         # Add reset gates for sampled qubits (deduplicated)
+#         unique_keys = sorted(set(sampled_keys))
+#         if unique_keys:
+#             new_circuit.append("R", unique_keys)
         
-        # Step 3: Add new circuit operations to the NEW circuit
-        for instruction in circuit:
-            gate_args = instruction.gate_args_copy()
-            targets = [t.value for t in instruction.targets_copy()]
+#         # Step 3: Add new circuit operations to the NEW circuit
+#         for instruction in circuit:
+#             gate_args = instruction.gate_args_copy()
+#             targets = [t.value for t in instruction.targets_copy()]
             
-            if gate_args:
-                new_circuit.append(instruction.name, targets, *gate_args)
-            else:
-                new_circuit.append(instruction.name, targets)
+#             if gate_args:
+#                 new_circuit.append(instruction.name, targets, *gate_args)
+#             else:
+#                 new_circuit.append(instruction.name, targets)
         
-        # Step 4: REPLACE the old circuit for ALL qubits in the (now updated) group
-        # After ungrouping above, self.keys now only contains sampled_keys
-        for key in self.keys:
-            if key in quantum_manager.states:
-                quantum_manager.states[key].circuit = new_circuit
+#         # Step 4: REPLACE the old circuit for ALL qubits in the (now updated) group
+#         # After ungrouping above, self.keys now only contains sampled_keys
+#         for key in self.keys:
+#             if key in quantum_manager.states:
+#                 quantum_manager.states[key].circuit = new_circuit
         
-        # Step 5: Invalidate cached tableau
-        self._tableau = None
+#         # Step 5: Invalidate cached tableau
+#         self._tableau = None
         
     
-    def _compute_density_matrix(self) -> np.ndarray:
-        """Compute density matrix via Pauli tomography using compiled samplers."""
-        k = len(self.keys)
+#     def _compute_density_matrix(self) -> np.ndarray:
+#         """Compute density matrix via Pauli tomography using compiled samplers."""
+#         k = len(self.keys)
         
-        # Pauli operators
-        I = np.array([[1, 0], [0, 1]], dtype=complex)
-        X = np.array([[0, 1], [1, 0]], dtype=complex)
-        Y = np.array([[0, -1j], [1j, 0]], dtype=complex)
-        Z = np.array([[1, 0], [0, -1]], dtype=complex)
-        paulis = {'I': I, 'X': X, 'Y': Y, 'Z': Z}
+#         # Pauli operators
+#         I = np.array([[1, 0], [0, 1]], dtype=complex)
+#         X = np.array([[0, 1], [1, 0]], dtype=complex)
+#         Y = np.array([[0, -1j], [1j, 0]], dtype=complex)
+#         Z = np.array([[1, 0], [0, -1]], dtype=complex)
+#         paulis = {'I': I, 'X': X, 'Y': Y, 'Z': Z}
         
-        # Build density matrix via Pauli expansion
-        rho = np.zeros((2**k, 2**k), dtype=complex)
+#         # Build density matrix via Pauli expansion
+#         rho = np.zeros((2**k, 2**k), dtype=complex)
         
-        for i, pauli_string in enumerate(itertools.product('IXYZ', repeat=k)):
-            # Build measurement circuit for this Pauli string
-            meas_circuit = self.circuit.copy()
+#         for i, pauli_string in enumerate(itertools.product('IXYZ', repeat=k)):
+#             # Build measurement circuit for this Pauli string
+#             meas_circuit = self.circuit.copy()
             
-            # Add basis rotations and measurements
-            measured_qubits = []
-            for j, (qubit, pauli) in enumerate(zip(self.keys, pauli_string)):
-                if pauli == 'I':
-                    continue  # Don't measure identity
-                elif pauli == 'X':
-                    meas_circuit.append("H", [qubit])
-                elif pauli == 'Y':
-                    meas_circuit.append("S_DAG", [qubit])
-                    meas_circuit.append("H", [qubit])
-                # Z needs no rotation
+#             # Add basis rotations and measurements
+#             measured_qubits = []
+#             for j, (qubit, pauli) in enumerate(zip(self.keys, pauli_string)):
+#                 if pauli == 'I':
+#                     continue  # Don't measure identity
+#                 elif pauli == 'X':
+#                     meas_circuit.append("H", [qubit])
+#                 elif pauli == 'Y':
+#                     meas_circuit.append("S_DAG", [qubit])
+#                     meas_circuit.append("H", [qubit])
+#                 # Z needs no rotation
                 
-                meas_circuit.append("M", [qubit])
-                measured_qubits.append(j)
+#                 meas_circuit.append("M", [qubit])
+#                 measured_qubits.append(j)
             
-            # Estimate expectation value
-            if not measured_qubits:
-                expectation = 1.0  # All identity operators
-            else:
-                # Use deterministic seeding - NO RNG CALLS
-                if self.base_seed is not None:
-                    # Deterministic seed based on base_seed and Pauli string index
-                    pauli_hash = hash(pauli_string) % (2**16)
-                    seed = (self.base_seed + i + pauli_hash) % (2**31)
-                else:
-                    seed = None  # Non-deterministic
+#             # Estimate expectation value
+#             if not measured_qubits:
+#                 expectation = 1.0  # All identity operators
+#             else:
+#                 # Use deterministic seeding - NO RNG CALLS
+#                 if self.base_seed is not None:
+#                     # Deterministic seed based on base_seed and Pauli string index
+#                     pauli_hash = hash(pauli_string) % (2**16)
+#                     seed = (self.base_seed + i + pauli_hash) % (2**31)
+#                 else:
+#                     seed = None  # Non-deterministic
                 
-                # Compile sampler with seed
-                sampler = meas_circuit.compile_sampler(seed=seed)
-                samples = sampler.sample(shots=self.shots)
+#                 # Compile sampler with seed
+#                 sampler = meas_circuit.compile_sampler(seed=seed)
+#                 samples = sampler.sample(shots=self.shots)
                 
-                # Calculate expectation as average parity
-                if samples.shape[1] == 0:
-                    expectation = 1.0
-                else:
-                    # Parity: even number of 1s -> +1, odd -> -1
-                    parities = np.array([(-1) ** np.sum(row) for row in samples])
-                    expectation = np.mean(parities)
+#                 # Calculate expectation as average parity
+#                 if samples.shape[1] == 0:
+#                     expectation = 1.0
+#                 else:
+#                     # Parity: even number of 1s -> +1, odd -> -1
+#                     parities = np.array([(-1) ** np.sum(row) for row in samples])
+#                     expectation = np.mean(parities)
             
-            # Build tensor product of Pauli matrices
-            pauli_op = np.array([[1]], dtype=complex)
-            for p in pauli_string:
-                pauli_op = np.kron(pauli_op, paulis[p])
+#             # Build tensor product of Pauli matrices
+#             pauli_op = np.array([[1]], dtype=complex)
+#             for p in pauli_string:
+#                 pauli_op = np.kron(pauli_op, paulis[p])
             
-            rho += expectation * pauli_op
+#             rho += expectation * pauli_op
         
-        rho /= (2**k)
+#         rho /= (2**k)
 
 
-        # Ensure Hermitian (fix numerical errors)
-        rho = (rho + rho.conj().T) / 2
+#         # Ensure Hermitian (fix numerical errors)
+#         rho = (rho + rho.conj().T) / 2
         
-        return rho
+#         return rho
 
 
-    def group_qubits(self, quantum_manager, keys_to_group: List[int]) -> None:
-        """
-        Group this state with other qubits in the quantum manager.
+#     def group_qubits(self, quantum_manager, keys_to_group: List[int]) -> None:
+#         """
+#         Group this state with other qubits in the quantum manager.
         
-        This is a helper method that calls the quantum manager's group_qubits.
+#         This is a helper method that calls the quantum manager's group_qubits.
         
-        Args:
-            quantum_manager: Reference to the quantum manager
-            keys_to_group: List of qubit keys to group together (must include self.original_key)
-        """
-        if self.original_key not in keys_to_group:
-            raise ValueError(
-                f"Cannot group: original_key={self.original_key} must be in keys_to_group={keys_to_group}"
-            )
+#         Args:
+#             quantum_manager: Reference to the quantum manager
+#             keys_to_group: List of qubit keys to group together (must include self.original_key)
+#         """
+#         if self.original_key not in keys_to_group:
+#             raise ValueError(
+#                 f"Cannot group: original_key={self.original_key} must be in keys_to_group={keys_to_group}"
+#             )
         
-        quantum_manager.group_qubits(keys_to_group)
+#         quantum_manager.group_qubits(keys_to_group)
         
         
-    def measure(self, qubit_indices: list[int], basis: str = 'Z') -> list[int]:
-        """
-        Measure qubits, collapsing the state and preserving correlations.
+#     def measure(self, qubit_indices: list[int], basis: str = 'Z') -> list[int]:
+#         """
+#         Measure qubits, collapsing the state and preserving correlations.
         
-        Args:
-            qubit_indices: Indices within self.keys to measure
-            basis: Measurement basis ('Z', 'X', or 'Y')
+#         Args:
+#             qubit_indices: Indices within self.keys to measure
+#             basis: Measurement basis ('Z', 'X', or 'Y')
         
-        Returns:
-            List of measurement outcomes (0 or 1)
-        """
-        results = []
+#         Returns:
+#             List of measurement outcomes (0 or 1)
+#         """
+#         results = []
         
-        for idx in qubit_indices:
-            if idx >= len(self.keys):
-                results.append(0)
-                continue
+#         for idx in qubit_indices:
+#             if idx >= len(self.keys):
+#                 results.append(0)
+#                 continue
             
-            qubit = self.keys[idx]
+#             qubit = self.keys[idx]
             
-            # Apply basis rotation, measure, then undo rotation
-            if basis == 'X':
-                self.tableau.h(qubit)
-                outcome = int(self.tableau.measure(qubit))
-                self.tableau.h(qubit)
-            elif basis == 'Y':
-                self.tableau.s_dag(qubit)
-                self.tableau.h(qubit)
-                outcome = int(self.tableau.measure(qubit))
-                self.tableau.h(qubit)
-                self.tableau.s(qubit)
-            else:  # Z basis
-                outcome = int(self.tableau.measure(qubit))
+#             # Apply basis rotation, measure, then undo rotation
+#             if basis == 'X':
+#                 self.tableau.h(qubit)
+#                 outcome = int(self.tableau.measure(qubit))
+#                 self.tableau.h(qubit)
+#             elif basis == 'Y':
+#                 self.tableau.s_dag(qubit)
+#                 self.tableau.h(qubit)
+#                 outcome = int(self.tableau.measure(qubit))
+#                 self.tableau.h(qubit)
+#                 self.tableau.s(qubit)
+#             else:  # Z basis
+#                 outcome = int(self.tableau.measure(qubit))
             
-            results.append(outcome)
+#             results.append(outcome)
         
-        # Invalidate cached density matrix since state changed
-        self.state = None
+#         # Invalidate cached density matrix since state changed
+#         self.state = None
         
-        return results
+#         return results
     
     
-    def set_density_matrix(self, density_matrix: np.ndarray) -> None:
-        """
-        Set the density matrix directly without changing any other attributes.
+#     def set_density_matrix(self, density_matrix: np.ndarray) -> None:
+#         """
+#         Set the density matrix directly without changing any other attributes.
         
-        This is useful when you've computed a density matrix externally and want
-        to update the state without affecting original_key, keys, or circuit.
+#         This is useful when you've computed a density matrix externally and want
+#         to update the state without affecting original_key, keys, or circuit.
         
-        Args:
-            density_matrix: Pre-computed density matrix as numpy array
-        """
-        # Validation: check dimensions match expected size
-        expected_dim = 2 ** len(self.keys)
-        if density_matrix.shape != (expected_dim, expected_dim):
-            raise ValueError(
-                f"Density matrix shape {density_matrix.shape} doesn't match "
-                f"expected shape ({expected_dim}, {expected_dim}) for {len(self.keys)} qubits"
-            )
+#         Args:
+#             density_matrix: Pre-computed density matrix as numpy array
+#         """
+#         # Validation: check dimensions match expected size
+#         expected_dim = 2 ** len(self.keys)
+#         if density_matrix.shape != (expected_dim, expected_dim):
+#             raise ValueError(
+#                 f"Density matrix shape {density_matrix.shape} doesn't match "
+#                 f"expected shape ({expected_dim}, {expected_dim}) for {len(self.keys)} qubits"
+#             )
         
-        self.state = density_matrix
+#         self.state = density_matrix
         
         
-    def compute_density_matrix(self, keys_subset: List[int] = None) -> np.ndarray:
-        """
-        Compute density matrix for this state, optionally for a subset of qubits.
+#     def compute_density_matrix(self, keys_subset: List[int] = None) -> np.ndarray:
+#         """
+#         Compute density matrix for this state, optionally for a subset of qubits.
         
-        Args:
-            keys_subset: Subset of self.keys to compute density matrix for.
-                        If None, computes for all self.keys.
+#         Args:
+#             keys_subset: Subset of self.keys to compute density matrix for.
+#                         If None, computes for all self.keys.
         
-        Returns:
-            Density matrix as numpy array
-        """
-        if keys_subset is None:
-            # Compute for all qubits in this state
-            return self._compute_density_matrix()
+#         Returns:
+#             Density matrix as numpy array
+#         """
+#         if keys_subset is None:
+#             # Compute for all qubits in this state
+#             return self._compute_density_matrix()
         
-        # Validate keys_subset
-        if not set(keys_subset).issubset(set(self.keys)):
-            raise ValueError(
-                f"keys_subset {keys_subset} must be subset of state keys {self.keys}"
-            )
+#         # Validate keys_subset
+#         if not set(keys_subset).issubset(set(self.keys)):
+#             raise ValueError(
+#                 f"keys_subset {keys_subset} must be subset of state keys {self.keys}"
+#             )
         
-        if len(keys_subset) == len(self.keys):
-            # Computing for all qubits anyway
-            return self._compute_density_matrix()
+#         if len(keys_subset) == len(self.keys):
+#             # Computing for all qubits anyway
+#             return self._compute_density_matrix()
         
-        # For subset, we need to trace out the other qubits
-        # This requires computing full density matrix then tracing out
-        full_dm = self._compute_density_matrix()
+#         # For subset, we need to trace out the other qubits
+#         # This requires computing full density matrix then tracing out
+#         full_dm = self._compute_density_matrix()
         
-        # Determine which qubits to trace out
-        qubits_to_trace = [k for k in self.keys if k not in keys_subset]
+#         # Determine which qubits to trace out
+#         qubits_to_trace = [k for k in self.keys if k not in keys_subset]
         
-        # Trace out unwanted qubits
-        reduced_dm = self._partial_trace(full_dm, self.keys, qubits_to_trace)
+#         # Trace out unwanted qubits
+#         reduced_dm = self._partial_trace(full_dm, self.keys, qubits_to_trace)
         
-        return reduced_dm
+#         return reduced_dm
 
 
-    def _partial_trace(self, density_matrix: np.ndarray, all_keys: List[int], 
-                    trace_out_keys: List[int]) -> np.ndarray:
-        """
-        Compute partial trace over specified qubits.
+#     def _partial_trace(self, density_matrix: np.ndarray, all_keys: List[int], 
+#                     trace_out_keys: List[int]) -> np.ndarray:
+#         """
+#         Compute partial trace over specified qubits.
         
-        Args:
-            density_matrix: Full density matrix
-            all_keys: All qubit keys in the density matrix
-            trace_out_keys: Which qubits to trace out
+#         Args:
+#             density_matrix: Full density matrix
+#             all_keys: All qubit keys in the density matrix
+#             trace_out_keys: Which qubits to trace out
         
-        Returns:
-            Reduced density matrix after tracing out specified qubits
-        """
-        # Get indices of qubits to keep
-        keep_indices = [all_keys.index(k) for k in all_keys if k not in trace_out_keys]
+#         Returns:
+#             Reduced density matrix after tracing out specified qubits
+#         """
+#         # Get indices of qubits to keep
+#         keep_indices = [all_keys.index(k) for k in all_keys if k not in trace_out_keys]
         
-        n_qubits = len(all_keys)
-        n_keep = len(keep_indices)
+#         n_qubits = len(all_keys)
+#         n_keep = len(keep_indices)
         
-        # Reshape density matrix to separate each qubit's dimension
-        shape = [2] * (2 * n_qubits)
-        dm_reshaped = density_matrix.reshape(shape)
+#         # Reshape density matrix to separate each qubit's dimension
+#         shape = [2] * (2 * n_qubits)
+#         dm_reshaped = density_matrix.reshape(shape)
         
-        # Trace out unwanted qubits
-        for qubit_idx in sorted([all_keys.index(k) for k in trace_out_keys], reverse=True):
-            # Contract over this qubit's dimension
-            dm_reshaped = np.trace(dm_reshaped, axis1=qubit_idx, axis2=qubit_idx + n_qubits)
-            n_qubits -= 1
+#         # Trace out unwanted qubits
+#         for qubit_idx in sorted([all_keys.index(k) for k in trace_out_keys], reverse=True):
+#             # Contract over this qubit's dimension
+#             dm_reshaped = np.trace(dm_reshaped, axis1=qubit_idx, axis2=qubit_idx + n_qubits)
+#             n_qubits -= 1
         
-        # Reshape back to 2D matrix
-        dim = 2 ** n_keep
-        return dm_reshaped.reshape(dim, dim)
+#         # Reshape back to 2D matrix
+#         dim = 2 ** n_keep
+#         return dm_reshaped.reshape(dim, dim)
     
     
-    def copy(self):
-        """Create a copy of this state."""
-        new_state = StabilizerState(
-            keys=self.keys.copy(),
-            circuit=self.circuit.copy(),
-            shots=self.shots,
-            truncation=self.truncation,
-            base_seed=self.base_seed
-        )
-        new_state.state = self.state.copy()
-        new_state._tableau = None
-        return new_state
+#     def copy(self):
+#         """Create a copy of this state."""
+#         new_state = StabilizerState(
+#             keys=self.keys.copy(),
+#             circuit=self.circuit.copy(),
+#             shots=self.shots,
+#             truncation=self.truncation,
+#             base_seed=self.base_seed
+#         )
+#         new_state.state = self.state.copy()
+#         new_state._tableau = None
+#         return new_state
 
 class TableauState(State):
     """Tableau-backed quantum state used by a quantum manager."""
@@ -818,6 +812,36 @@ class TableauState(State):
             self.state = state
         else:
             raise TypeError(f"state must be stim.TableauSimulator or None, got {type(state)}")
+
+    @classmethod
+    def zero_state(cls, key: int, seed: int = None) -> "TableauState":
+        """Create a single-qubit tableau state initialized to |0>.
+
+        Args:
+            key: Quantum-manager key for the qubit.
+            seed: Seed used by stim.TableauSimulator.
+
+        Returns:
+            TableauState: New state bound to `[key]`.
+        """
+        simulator = TableauSimulator(seed=seed)
+        simulator.set_num_qubits(1)
+        return cls(state=simulator, keys=[key], seed=seed)
+
+    def copy(self) -> "TableauState":
+        """Create a copy of this tableau state.
+
+        Args:
+            None.
+
+        Returns:
+            TableauState: Copied state with copied keys and simulator.
+        """
+        if self.state is None:
+            simulator = TableauSimulator(seed=self.seed)
+        else:
+            simulator = self.state.copy(seed=self.seed)
+        return TableauState(state=simulator, keys=self.keys.copy(), seed=self.seed)
         
     def set_seed(self, seed: int):
         """Set the random seed for this state, affecting future simulator operations."""

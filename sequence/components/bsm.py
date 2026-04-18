@@ -82,6 +82,7 @@ def _set_state_with_fidelity(keys: list[int], desired_state: list[complex], fide
         append_bell_state(circuit, desired_state, keys)
         circuit.append("DEPOLARIZE2", [keys[0], keys[1]], (1-fidelity))          
         qm.set(keys, circuit)
+        
     elif formalism == TABLEAU_FORMALISM:
         fidelity = float(max(0.0, min(1.0, fidelity)))
         probabilities = [(1 - fidelity) / 3] * 4

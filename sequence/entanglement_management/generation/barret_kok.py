@@ -10,11 +10,11 @@ if TYPE_CHECKING:
 from ...resource_management.memory_manager import MemoryInfo
 from ...constants import BARRET_KOK
 from .generation_base import EntanglementGenerationA, EntanglementGenerationB, QuantumCircuitMixin
-
+from ...components.circuit import Circuit
 from ...kernel.event import Event
 from ...kernel.process import Process
 from ...utils import log
-import stim
+
 
 @EntanglementGenerationA.register(BARRET_KOK)
 class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
@@ -88,6 +88,7 @@ class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
             elif self.bsm_res[0] != self.bsm_res[1]:
                 self.owner.timeline.quantum_manager.run_circuit(self._z_circuit, [self._qstate_key])
             log.logger.info(f"[T:{self.owner.timeline.now():,}] SUCCESS")
+            print(f"{self.name}, [T:{self.owner.timeline.now():,}] SUCCESS")
             self._entanglement_succeed()
             return True
 
@@ -274,45 +275,9 @@ class BarretKokB(EntanglementGenerationB):
                                                     resolution=resolution)
             self.owner.send_message(node, message)
 
-# Stabilizer-compatible version
-@EntanglementGenerationA.register('barret_kok_stabilizer')
-class BarretKokStabilizerA(BarretKokA):
-    """Barrett-Kok protocol adapted for stabilizer formalism."""
-    
-    def update_memory(self) -> bool | None:
-        """Override to use run_circuit for all gate operations."""
-        if self not in self.owner.protocols:
-            return
-
-        self.ent_round += 1
-        qm = self.owner.timeline.quantum_manager
-        key = self._qstate_key
-
-        if self.ent_round == 1:
-            return True
-
-        elif self.ent_round == 2 and self.bsm_res[0] != -1:
-            # Apply X gate using run_circuit
-            # qm.set(self._flip_circuit, [key])
-            qm.run_circuit(self._flip_circuit, [key])
-            return True
-
-        elif self.ent_round == 3 and self.bsm_res[1] != -1:
-            # Apply corrections using run_circuit
-            if self.primary:
-                qm.run_circuit(self._flip_circuit, [key])
-            elif self.bsm_res[0] != self.bsm_res[1]:
-                qm.run_circuit(self._z_circuit, [key])
-
-            self._entanglement_succeed()
-            return True
-        else:
-            self._entanglement_fail()
-            return False
+EntanglementGenerationA.register("barret_kok_stabilizer", BarretKokA)
+EntanglementGenerationA.register("barret_kok_tableau", BarretKokA)
 
 # Register existing B class for stabilizer name
 EntanglementGenerationB.register('barret_kok_stabilizer', BarretKokB)
-
-EntanglementGenerationA.register('barret_kok_tableau', BarretKokStabilizerA)
-
 EntanglementGenerationB.register('barret_kok_tableau', BarretKokB)

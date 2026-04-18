@@ -4,6 +4,7 @@ This module defines the Timeline class, which provides an interface for the simu
 All entities are required to have an attached timeline for simulation.
 """
 from _thread import start_new_thread
+from collections import Counter
 from datetime import timedelta
 from sys import stdout
 from time import sleep, time_ns
@@ -101,6 +102,9 @@ class Timeline:
         """
         log.logger.info("Timeline start simulation")
         tick = time_ns()
+        activation_counts: Counter[str] = Counter()
+        owner_activation_counts: Counter[tuple[str, str]] = Counter()
+        receive_message_counts: Counter[tuple[str, str, str, str, str]] = Counter()
         self.is_running = True
 
         if self.show_progress:
@@ -119,11 +123,41 @@ class Timeline:
             self.time = event.time
             
             log.logger.debug("Event #{}: process owner={}, activation={}".format(self.run_counter, event.process.owner, event.process.activation))
+            owner_name = getattr(event.process.owner, "name", str(event.process.owner))
+            activation_name = str(event.process.activation)
+            activation_counts[activation_name] += 1
+            owner_activation_counts[(owner_name, activation_name)] += 1
+            if activation_name == "receive_message" and len(event.process.activation_args) >= 2:
+                msg = event.process.activation_args[1]
+                receiver_name = str(getattr(msg, "receiver", None))
+                msg_class_name = type(msg).__name__
+                protocol_type_name = str(getattr(msg, "protocol_type", None))
+                msg_type_obj = getattr(msg, "msg_type", None)
+                msg_type_name = getattr(msg_type_obj, "name", str(msg_type_obj))
+                receive_message_counts[(owner_name, receiver_name, msg_class_name, protocol_type_name, msg_type_name)] += 1
             event.process.run()
             self.run_counter += 1
+            if self.run_counter % 10000 == 0:
+                print(
+                    f"[timeline] executed={self.run_counter} now_ps={self.time} queued_events={len(self.events)}",
+                    flush=True,
+                )
 
         self.is_running = False
         time_elapsed = time_ns() - tick
+        print("[timeline] top_activations:", flush=True)
+        for activation, count in activation_counts.most_common(10):
+            print(f"[timeline] activation={activation} count={count}", flush=True)
+        print("[timeline] top_owner_activations:", flush=True)
+        for (owner, activation), count in owner_activation_counts.most_common(10):
+            print(f"[timeline] owner={owner} activation={activation} count={count}", flush=True)
+        print("[timeline] top_receive_messages:", flush=True)
+        for (owner, receiver, msg_class, protocol_type, msg_type), count in receive_message_counts.most_common(20):
+            print(
+                f"[timeline] owner={owner} receiver={receiver} class={msg_class} "
+                f"protocol_type={protocol_type} msg_type={msg_type} count={count}",
+                flush=True,
+            )
         log.logger.info("Timeline end simulation. Execution Time: {}; Scheduled Event: {}; Executed Event: {}".format(
                          self.ns_to_human_time(time_elapsed), self.schedule_counter, self.run_counter))
 
