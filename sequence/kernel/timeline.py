@@ -4,6 +4,7 @@ This module defines the Timeline class, which provides an interface for the simu
 All entities are required to have an attached timeline for simulation.
 """
 from _thread import start_new_thread
+from collections import Counter
 from datetime import timedelta
 from sys import stdout
 from time import sleep, time_ns
@@ -101,6 +102,9 @@ class Timeline:
         """
         log.logger.info("Timeline start simulation")
         tick = time_ns()
+        activation_counts: Counter[str] = Counter()
+        owner_activation_counts: Counter[tuple[str, str]] = Counter()
+        receive_message_counts: Counter[tuple[str, str, str, str, str]] = Counter()
         self.is_running = True
 
         if self.show_progress:

@@ -107,6 +107,8 @@ class MemoryInfo:
     RAW = "RAW"
     OCCUPIED = "OCCUPIED"
     ENTANGLED = "ENTANGLED"
+    ENCODED = "ENCODED"
+    ENCODED_ENTANGLED = "ENCODED_ENTANGLED"
 
     def __init__(self, memory: "Memory", index: int, state="RAW"):
         """Constructor for memory info class.

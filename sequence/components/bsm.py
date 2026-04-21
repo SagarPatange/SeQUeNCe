@@ -7,6 +7,8 @@ Also defined is a function to automatically construct a BSM of a specified type.
 
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
+import numpy as np
+import stim
 
 if TYPE_CHECKING:
     from ..kernel.quantum_manager import QuantumManager
@@ -15,13 +17,14 @@ if TYPE_CHECKING:
 
 from numpy import outer, add, zeros, array_equal
 
+from ..kernel.quantum_utils import append_bell_state
 from .circuit import Circuit
 from .detector import Detector
 from .photon import Photon
 from ..kernel.entity import Entity
 from ..kernel.event import Event
 from ..kernel.process import Process
-from ..constants import KET_STATE_FORMALISM, DENSITY_MATRIX_FORMALISM
+from ..constants import KET_STATE_FORMALISM, DENSITY_MATRIX_FORMALISM, STABILIZER_FORMALISM, TABLEAU_FORMALISM
 from ..utils.encoding import *
 from ..utils import log
 
@@ -50,50 +53,99 @@ def make_bsm(name, timeline: "Timeline", encoding_type='time_bin', phase_error=0
 
 
 def _set_state_with_fidelity(keys: list[int], desired_state: list[complex], fidelity: float, rng, qm: "QuantumManager"):
+    log.logger.info(f"ENTERED _set_state_with_fidelity: formalism={qm.get_active_formalism()}, fidelity={fidelity}")
+    formalism = qm.get_active_formalism()
+    
     possible_states = [BSM._phi_plus, BSM._phi_minus,
                        BSM._psi_plus, BSM._psi_minus]
     assert desired_state in possible_states
 
-    if qm.get_active_formalism() == KET_STATE_FORMALISM:
+    # Only use randomization for imperfect fidelity
+    if formalism == KET_STATE_FORMALISM:
         probabilities = [(1 - fidelity) / 3] * 4
         probabilities[possible_states.index(desired_state)] = fidelity
         state_ind = rng.choice(4, p=probabilities)
+        log.logger.info(f"Ket: fidelity={fidelity}, random state selection")  
         qm.set(keys, possible_states[state_ind])
 
-    elif qm.get_active_formalism() == DENSITY_MATRIX_FORMALISM:
+    elif formalism == DENSITY_MATRIX_FORMALISM:
         multipliers = [(1 - fidelity) / 3] * 4
         multipliers[possible_states.index(desired_state)] = fidelity
         state = zeros((4, 4))
         for mult, pure in zip(multipliers, possible_states):
             state = add(state, mult * outer(pure, pure))
         qm.set(keys, state)
+        
+    elif formalism == STABILIZER_FORMALISM:
+        log.logger.info(f"Stabilizer: fidelity={fidelity}, Werner state via DEPOLARIZE2")
+        circuit = stim.Circuit()
+        append_bell_state(circuit, desired_state, keys)
+        circuit.append("DEPOLARIZE2", [keys[0], keys[1]], (1-fidelity))          
+        qm.set(keys, circuit)
+        
+    elif formalism == TABLEAU_FORMALISM:
+        fidelity = float(max(0.0, min(1.0, fidelity)))
+        probabilities = [(1 - fidelity) / 3] * 4
+        probabilities[possible_states.index(desired_state)] = fidelity
+        state_ind = rng.choice(4, p=probabilities)
+        qm.set(keys, possible_states[state_ind])
 
     else:
         raise Exception(f"Invalid quantum manager with formalism {qm.get_active_formalism()}")
 
 
 def _set_pure_state(keys: list[int], ket_state: list[complex], qm: "QuantumManager"):
-    if qm.get_active_formalism() == KET_STATE_FORMALISM:
+    """Set a pure state, handling stabilizer formalism properly."""
+
+    formalism = qm.get_active_formalism()
+
+    if formalism == KET_STATE_FORMALISM:
         qm.set(keys, ket_state)
-    elif qm.get_active_formalism() == DENSITY_MATRIX_FORMALISM:
+    elif formalism == DENSITY_MATRIX_FORMALISM:
         state = outer(ket_state, ket_state)
         qm.set(keys, state)
+    elif formalism == STABILIZER_FORMALISM:
+        qm.set(keys, ket_state)
+    elif formalism == TABLEAU_FORMALISM:
+        qm.set(keys, ket_state)
+
     else:
-        raise NotImplementedError("formalism of quantum state {} is not "
-                                  "implemented in the set_pure_quantum_state "
-                                  "function of bsm.py".format(qm.get_active_formalism()))
+        raise NotImplementedError(f"Unknown formalism: {formalism}")
 
 
 def _eq_psi_plus(state: "State", formalism: str):
+    
     if formalism == KET_STATE_FORMALISM:
         return array_equal(state.state, BSM._psi_plus)
     elif formalism == DENSITY_MATRIX_FORMALISM:
         d_state = outer(BSM._phi_plus, BSM._psi_plus)
         return array_equal(state.state, d_state)
+    elif formalism == STABILIZER_FORMALISM:  
+              
+        rho = state.compute_density_matrix(keys_subset = state.keys)
+        # if hasattr(state, 'state') and isinstance(state.state, np.ndarray):
+            # rho = state.state
+            # Create ideal |ψ+⟩ density matrix
+        ideal_rho = outer(BSM._psi_plus, BSM._psi_plus)
+        equal_dms = np.allclose(rho, ideal_rho, atol=0.1)
+        return equal_dms
+    elif formalism == TABLEAU_FORMALISM:
+        # TableauState -> tableau -> state vector -> compare with |psi+>.
+        target = np.array(BSM._psi_plus, dtype=complex)
+        vec = np.array(state.current_tableau().to_state_vector(endian="little"), dtype=complex)
+        return np.allclose(vec, target) or np.allclose(vec, -target)
+
+
+        raise TypeError("TABLEAU formalism expected TableauState-like object.")
+
+
+
     else:
         raise NotImplementedError("formalism of quantum state {} is not "
-                                  "implemented in the eq_phi_plus "
+                                  "implemented in the eq_psi_plus "
                                   "function of bsm.py".format(formalism))
+
+
 
 
 class BSM(Entity):
@@ -478,14 +530,24 @@ class SingleAtomBSM(BSM):
                 if len(state0.keys) == 1:
                     # if we're in stage 1: we set state to psi+/psi- to mark the
                     # first triggered detector
+                    log.logger.info(f"[T:{self.timeline.now():,}] Stage 1")
                     log.logger.info(self.name + " passed stage 1")
                     if detector_num == 0:
                         _set_pure_state(keys, BSM._psi_minus, qm)
+
                     else:
                         _set_pure_state(keys, BSM._psi_plus, qm)
+
+                    # CRITICAL FIX: Refresh state references after _set_pure_state
+                    # _set_pure_state calls qm.set() which may call group_qubits(),
+                    # which creates NEW state objects and replaces the old ones.
+                    # We must refresh our references to avoid stale state objects.
+                    state0, state1 = qm.get(key0), qm.get(key1)
+
                 elif len(state0.keys) == 2:
                     # if we're in stage 2: check if the same detector is triggered
                     # twice to assign state to psi+ or psi-
+                    log.logger.info(f"[T:{self.timeline.now():,}] Stage 2, eq_psi={_eq_psi_plus(state0, qm.get_active_formalism())}")
                     log.logger.info(self.name + " passed stage 2")
                     if _eq_psi_plus(state0, qm.get_active_formalism()) ^ detector_num:
                         _set_state_with_fidelity(keys, BSM._psi_minus, p0.encoding_type["raw_fidelity"],

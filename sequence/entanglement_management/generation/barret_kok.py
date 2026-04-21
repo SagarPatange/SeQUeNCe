@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from ...resource_management.memory_manager import MemoryInfo
 from ...constants import BARRET_KOK
 from .generation_base import EntanglementGenerationA, EntanglementGenerationB, QuantumCircuitMixin
-
+from ...components.circuit import Circuit
 from ...kernel.event import Event
 from ...kernel.process import Process
 from ...utils import log
@@ -70,12 +70,15 @@ class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
             return
 
         self.ent_round += 1
+        log.logger.info(f"[T:{self.owner.timeline.now():,}] {self.name} UPDATE round={self.ent_round}, bsm={self.bsm_res}")
 
         if self.ent_round == 1:
+            # log.logger.info(f"[T:{self.owner.timeline.now():,}] Round 1 done")
             return True
 
         elif self.ent_round == 2 and self.bsm_res[0] != -1:
             self.owner.timeline.quantum_manager.run_circuit(self._flip_circuit, [self._qstate_key])
+            log.logger.info(f"[T:{self.owner.timeline.now():,}] Round 1 done")
             return True
 
         elif self.ent_round == 3 and self.bsm_res[1] != -1:
@@ -84,11 +87,13 @@ class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
                 self.owner.timeline.quantum_manager.run_circuit(self._flip_circuit, [self._qstate_key])
             elif self.bsm_res[0] != self.bsm_res[1]:
                 self.owner.timeline.quantum_manager.run_circuit(self._z_circuit, [self._qstate_key])
+            log.logger.info(f"[T:{self.owner.timeline.now():,}] SUCCESS")
             self._entanglement_succeed()
             return True
 
         else:
             # entanglement failed
+            log.logger.info(f"[T:{self.owner.timeline.now():,}] FAILED")
             self._entanglement_fail()
             return False
 
@@ -268,3 +273,10 @@ class BarretKokB(EntanglementGenerationB):
                                                     time=time,
                                                     resolution=resolution)
             self.owner.send_message(node, message)
+
+EntanglementGenerationA.register("barret_kok_stabilizer", BarretKokA)
+EntanglementGenerationA.register("barret_kok_tableau", BarretKokA)
+
+# Register existing B class for stabilizer name
+EntanglementGenerationB.register('barret_kok_stabilizer', BarretKokB)
+EntanglementGenerationB.register('barret_kok_tableau', BarretKokB)

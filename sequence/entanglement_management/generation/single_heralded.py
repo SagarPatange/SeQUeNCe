@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Dict, Any
+import numpy as np
 
 from .generation_base import EntanglementGenerationA, EntanglementGenerationB, QuantumCircuitMixin
 from .generation_message import EntanglementGenerationMessage, GenerationMsgType, valid_trigger_time
 from ...components.bsm import SingleHeraldedBSM
 from ...constants import BELL_DIAGONAL_STATE_FORMALISM
 from ...constants import SINGLE_HERALDED
+from ...constants import TABLEAU_FORMALISM
+
 from ...kernel.event import Event
 from ...kernel.process import Process
 from ...kernel.quantum_manager import QuantumManager
@@ -259,3 +262,141 @@ class SingleHeraldedB(EntanglementGenerationB):
                                                     time=time,
                                                     resolution=resolution)
             self.owner.send_message(node, message)
+
+# Stabilizer-compatible version
+@EntanglementGenerationA.register('single_heralded_stabilizer')
+class SingleHeraldedStabilizerA(SingleHeraldedA):
+    """Single-heralded protocol adapted for stabilizer formalism."""
+    
+    def update_memory(self) -> bool | None:
+        """Override for stabilizer - simplified since no BDS."""
+        if self not in self.owner.protocols:
+            return
+
+        self.ent_round += 1
+
+        if self.ent_round == 1:
+            return True
+
+        elif self.ent_round == 2:
+            # For stabilizer, we check detector clicks differently
+            if self.bsm_res[0] >= 1 and self.bsm_res[1] >= 1:
+                # Create entanglement using Stim
+                qm = self.owner.timeline.quantum_manager
+                self_key = self._qstate_key
+                remote_memory = self.owner.timeline.get_entity_by_name(self.remote_memo_id)
+                remote_key = remote_memory.qstate_key
+                
+                if hasattr(qm.states[self_key], 'circuit'):
+                    import stim
+                    # Create Bell pair circuit
+                    circuit = stim.Circuit()
+                    circuit.append("H", [self_key])
+                    circuit.append("CX", [self_key, remote_key])
+                    
+                    # Apply to both memories
+                    qm.states[self_key].circuit = circuit
+                    qm.states[self_key].keys = [self_key, remote_key]
+                    qm.states[self_key].state = qm.states[self_key]._compute_density_matrix()
+                    qm.states[remote_key] = qm.states[self_key]
+                
+                self._entanglement_succeed()
+                return True
+        
+        self._entanglement_fail()
+        return False
+
+    def emit_event(self) -> None:
+        """Override to use Stim circuits for state preparation."""
+        if self.ent_round == 1:
+            qm = self.owner.timeline.quantum_manager
+            key = self.memory.qstate_key
+            
+            if hasattr(qm.states[key], 'circuit'):
+                import stim
+                # Prepare |+⟩ state
+                qm.states[key].circuit = stim.Circuit()
+                qm.states[key].circuit.append("H", [key])
+                qm.states[key].state = qm.states[key]._compute_density_matrix()
+            else:
+                # Fallback
+                self.memory.update_state([1/np.sqrt(2), 1/np.sqrt(2)])
+        
+        self.memory.excite(self.middle, protocol='sh')
+
+# Add near the stabilizer class section
+
+@EntanglementGenerationA.register('single_heralded_tableau') #TODO: needs a thorough review and testing
+class SingleHeraldedTableauA(SingleHeraldedA):
+    """Single-heralded protocol adapted for tableau formalism."""
+
+    def __init__(self, owner: "Node", name: str, middle: str, other: str, memory: "Memory",
+                 raw_fidelity: float = None, raw_epr_errors: List[float] = None):
+        # Bypass SingleHeraldedA.__init__ (it asserts Bell-diagonal formalism).
+        EntanglementGenerationA.__init__(self, owner, name, middle, other, memory)
+        self.protocol_type = SINGLE_HERALDED
+
+        assert QuantumManager.get_active_formalism() == TABLEAU_FORMALISM, \
+            f"SingleHeraldedTableauA requires tableau formalism; got {QuantumManager.get_active_formalism()}"
+
+        self.raw_fidelity = memory.raw_fidelity if raw_fidelity is None else raw_fidelity
+        assert 0.5 <= self.raw_fidelity <= 1, "Raw fidelity must be in [0.5, 1]."
+
+        self.raw_epr_errors = [1 / 3, 1 / 3, 1 / 3] if raw_epr_errors is None else raw_epr_errors
+        if self.raw_epr_errors:
+            assert len(self.raw_epr_errors) == 3, \
+                "Raw EPR pair pauli error list should have three elements in X, Y, Z order."
+
+        self.bsm_res = [0, 0]
+
+    def update_memory(self) -> bool | None:
+        if self not in self.owner.protocols:
+            return
+
+        self.ent_round += 1
+        if self.ent_round == 1:
+            return True
+
+        if self.ent_round == 2:
+            if self.bsm_res[0] >= 1 and self.bsm_res[1] >= 1:
+                qm = self.owner.timeline.quantum_manager
+                self_key = self._qstate_key
+                remote_memory: "Memory" = self.owner.timeline.get_entity_by_name(self.remote_memo_id)
+                remote_key = remote_memory.qstate_key
+                keys = [self_key, remote_key]
+
+                # Werner-style Bell-state sampling (same style as ket/tableau BSM helper).
+                possible_states = [
+                    [1 / np.sqrt(2), 0, 0, 1 / np.sqrt(2)],   # phi+
+                    [1 / np.sqrt(2), 0, 0, -1 / np.sqrt(2)],  # phi-
+                    [0, 1 / np.sqrt(2), 1 / np.sqrt(2), 0],   # psi+
+                    [0, 1 / np.sqrt(2), -1 / np.sqrt(2), 0],  # psi-
+                ]
+                probs = [(1 - self.raw_fidelity) / 3] * 4
+                probs[2] = self.raw_fidelity  # choose psi+ as target
+                idx = self.owner.get_generator().choice(4, p=probs)
+
+                qm.set(keys, possible_states[idx])
+                self._entanglement_succeed()
+                return True
+
+            self._entanglement_fail()
+            return False
+
+        self._entanglement_fail()
+        return False
+
+    def emit_event(self) -> None:
+        if not self.is_ready():
+            log.logger.info(f'{self} is not valid, emit_event() failed.')
+            return
+
+        if self.ent_round == 1:
+            self.memory.update_state(QuantumCircuitMixin._plus_state)
+        self.memory.excite(self.middle, protocol='sh')
+
+
+# Register existing B class for stabilizer name  
+EntanglementGenerationB.register('single_heralded_stabilizer', SingleHeraldedB)
+
+EntanglementGenerationB.register('single_heralded_tableau', SingleHeraldedB)

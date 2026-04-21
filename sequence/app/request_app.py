@@ -48,7 +48,7 @@ class RequestApp:
         self.memo_to_reservation: dict[int, Reservation] = {}
         self.name: str = f"{self.node.name}.RequestApp"
 
-    def start(self, responder: str, start_t: int, end_t: int, memo_size: int, fidelity: float):
+    def start(self, responder: str, start_t: int, end_t: int, memo_size: int, fidelity: float): 
         """Method to start the application.
 
             This method will use arguments to create a request and send to the network.
@@ -162,3 +162,8 @@ class RequestApp:
 
     def __str__(self) -> str:
         return self.name
+
+
+class RequestLogicalPairApp:
+
+    pass

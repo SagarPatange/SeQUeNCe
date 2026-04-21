@@ -30,6 +30,8 @@ KET_STATE_FORMALISM: Final = "ket_vector"
 DENSITY_MATRIX_FORMALISM: Final = "density_matrix"
 FOCK_DENSITY_MATRIX_FORMALISM: Final = "fock_density"
 BELL_DIAGONAL_STATE_FORMALISM: Final = "bell_diagonal"
+STABILIZER_FORMALISM: Final = "stabilizer"
+TABLEAU_FORMALISM: Final = "tableau"
 
 # Built-In Generation Protocols
 BARRET_KOK: Final = 'barret_kok'

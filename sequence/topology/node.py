@@ -873,3 +873,68 @@ class DQCNode(QuantumRouter):
                     if protocol.name == msg.receiver:
                         protocol.received_message(src, msg)
                         break
+
+
+class QuantumRouter2ndGeneration(QuantumRouter):
+    """Code for QuantumRouter2ndGeneration class -- node that supports 2nd generation quantum repeaters
+
+    It is inherited from the QuantumRouter class so that QuantumRouter2ndGeneration can do all what a QuantumRouter can do, such as routing.
+
+    Attributes:
+        name (str): Name of the quantum node.
+        timeline (Timeline): The timeline for scheduling operations.
+        seed (int): the seed of the this node's random number generator.
+        component_templates (dict): templates for the components of this node.
+        gate_fid (float): fidelity of gate operations (default is 1).
+        meas_fid (float): fidelity of measurement operations (default is 1).
+        memo_arr_name (str): name of the communication memory array.
+        resource_manager (ResourceManager): resource management module.
+        network_manager (NetworkManager): network management module.
+        map_to_middle_node (dict[str, str]): mapping of router names to intermediate bsm node names.
+        app (any): application in use on node.
+
+        data_memo_arr_name (str): name of the data memory array.
+        ancilla_memo_arr_name (str): name of the ancilla memory array.
+    """
+    def __init__(self, name: str, timeline: "Timeline", memo_size: int = 1, seed: int = None, component_templates: dict = {},
+                 gate_fid: float = 1, meas_fid: float = 1, two_qubit_gate_fid: float = 1,
+                 data_memo_size: int = 1, ancilla_memo_size: int = 1):
+        super().__init__(name, timeline, memo_size, seed, component_templates, gate_fid, meas_fid)
+        self.two_qubit_gate_fid = two_qubit_gate_fid
+        # your data qubits
+        self.data_memo_arr_name = f"{name}.DataMemoryArray"
+        data_memo_arr_args = component_templates.get("DataMemoryArray", {})  # Keep the same 
+        data_memory_array = MemoryArray(self.data_memo_arr_name, timeline, data_memo_size, **data_memo_arr_args)
+        self.add_component(data_memory_array)
+
+        self.ancilla_memo_arr_name = f"{name}.AncillaMemoryArray"
+        ancilla_memo_arr_args = component_templates.get("AncillaMemoryArray", {})  # Keep the same 
+        ancilla_memory_array = MemoryArray(self.ancilla_memo_arr_name, timeline, ancilla_memo_size, **ancilla_memo_arr_args)
+        self.add_component(ancilla_memory_array)
+
+
+    def receive_message(self, src: str, msg: "Message") -> None:
+        """Determine what to do when a message is received, based on the msg.receiver.
+
+        Args:
+            src (str): name of node that sent the message.
+            msg (Message): the received message.
+        """
+
+        log.logger.info("{} receive message {} from {}".format(self.name, msg, src))
+        if msg.receiver == "network_manager":
+            self.network_manager.received_message(src, msg)
+        elif msg.receiver == "resource_manager":
+            self.resource_manager.received_message(src, msg)
+        elif msg.receiver == "request_logical_pair_app":
+            self.request_logical_pair_app.received_message(src, msg)
+        else:
+            if msg.receiver is None:  # the msg sent by EntanglementGenerationB doesn't have a receiver (EGA & EGB not paired)
+                matching = [p for p in self.protocols if p.protocol_type == msg.protocol_type]
+                for p in matching:    # the valid_trigger_time() function resolves multiple matching issue
+                    p.received_message(src, msg)
+            else:
+                for protocol in self.protocols:
+                    if protocol.name == msg.receiver:
+                        protocol.received_message(src, msg)
+                        break

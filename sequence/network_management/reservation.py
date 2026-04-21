@@ -515,52 +515,52 @@ class ResourceReservationProtocol(StackProtocol):
             rules.append(rule)
 
         # 2. create rules for entanglement purification
-        if index > 0:
-            condition_args = {"memory_indices": memory_indices[:reservation.memory_size], "reservation": reservation}
-            action_args = {}
-            rule = Rule(10, ep_rule_action1, ep_rule_condition1, action_args, condition_args)
-            rules.append(rule)
+        # if index > 0:
+        #     condition_args = {"memory_indices": memory_indices[:reservation.memory_size], "reservation": reservation}
+        #     action_args = {}
+        #     rule = Rule(10, ep_rule_action1, ep_rule_condition1, action_args, condition_args)
+        #     rules.append(rule)
 
-        if index < len(path) - 1:
-            if index == 0:
-                condition_args = {"memory_indices": memory_indices, "fidelity": reservation.fidelity}
-            else:
-                condition_args = {"memory_indices": memory_indices[reservation.memory_size:], "fidelity": reservation.fidelity}
+        # if index < len(path) - 1:
+        #     if index == 0:
+        #         condition_args = {"memory_indices": memory_indices, "fidelity": reservation.fidelity}
+        #     else:
+        #         condition_args = {"memory_indices": memory_indices[reservation.memory_size:], "fidelity": reservation.fidelity}
 
-            action_args = {}
-            rule = Rule(10, ep_rule_action2, ep_rule_condition2, action_args, condition_args)
-            rules.append(rule)
+        #     action_args = {}
+        #     rule = Rule(10, ep_rule_action2, ep_rule_condition2, action_args, condition_args)
+        #     rules.append(rule)
 
-        # 3. create rules for entanglement swapping
-        if index == 0:
-            condition_args = {"memory_indices": memory_indices, "target_remote": path[-1], "fidelity": reservation.fidelity}
-            action_args = {}
-            rule = Rule(10, es_rule_actionB, es_rule_conditionB1, action_args, condition_args)
-            rules.append(rule)
-        elif index == len(path) - 1:
-            action_args = {}
-            condition_args = {"memory_indices": memory_indices, "target_remote": path[0], "fidelity": reservation.fidelity}
-            rule = Rule(10, es_rule_actionB, es_rule_conditionB1, action_args, condition_args)
-            rules.append(rule)
-        else:
-            _path = path[:]
-            while _path.index(self.owner.name) % 2 == 0:
-                new_path = []
-                for i, n in enumerate(_path):
-                    if i % 2 == 0 or i == len(_path) - 1:
-                        new_path.append(n)
-                _path = new_path
-            _index = _path.index(self.owner.name)
-            left, right = _path[_index - 1], _path[_index + 1]
+        # # 3. create rules for entanglement swapping
+        # if index == 0:
+        #     condition_args = {"memory_indices": memory_indices, "target_remote": path[-1], "fidelity": reservation.fidelity}
+        #     action_args = {}
+        #     rule = Rule(10, es_rule_actionB, es_rule_conditionB1, action_args, condition_args)
+        #     rules.append(rule)
+        # elif index == len(path) - 1:
+        #     action_args = {}
+        #     condition_args = {"memory_indices": memory_indices, "target_remote": path[0], "fidelity": reservation.fidelity}
+        #     rule = Rule(10, es_rule_actionB, es_rule_conditionB1, action_args, condition_args)
+        #     rules.append(rule)
+        # else:
+        #     _path = path[:]
+        #     while _path.index(self.owner.name) % 2 == 0:
+        #         new_path = []
+        #         for i, n in enumerate(_path):
+        #             if i % 2 == 0 or i == len(_path) - 1:
+        #                 new_path.append(n)
+        #         _path = new_path
+        #     _index = _path.index(self.owner.name)
+        #     left, right = _path[_index - 1], _path[_index + 1]
 
-            condition_args = {"memory_indices": memory_indices, "left": left, "right": right, "fidelity": reservation.fidelity}
-            action_args = {"es_succ_prob": self.es_succ_prob, "es_degradation": self.es_degradation}
-            rule = Rule(10, es_rule_actionA, es_rule_conditionA, action_args, condition_args)
-            rules.append(rule)
+        #     condition_args = {"memory_indices": memory_indices, "left": left, "right": right, "fidelity": reservation.fidelity}
+        #     action_args = {"es_succ_prob": self.es_succ_prob, "es_degradation": self.es_degradation}
+        #     rule = Rule(10, es_rule_actionA, es_rule_conditionA, action_args, condition_args)
+        #     rules.append(rule)
 
-            action_args = {}
-            rule = Rule(10, es_rule_actionB, es_rule_conditionB2, action_args, condition_args)
-            rules.append(rule)
+        #     action_args = {}
+        #     rule = Rule(10, es_rule_actionB, es_rule_conditionB2, action_args, condition_args)
+        #     rules.append(rule)
 
         for rule in rules:
             rule.set_reservation(reservation)
