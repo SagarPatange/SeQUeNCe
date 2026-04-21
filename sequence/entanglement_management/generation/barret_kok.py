@@ -88,7 +88,6 @@ class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
             elif self.bsm_res[0] != self.bsm_res[1]:
                 self.owner.timeline.quantum_manager.run_circuit(self._z_circuit, [self._qstate_key])
             log.logger.info(f"[T:{self.owner.timeline.now():,}] SUCCESS")
-            print(f"{self.name}, [T:{self.owner.timeline.now():,}] SUCCESS")
             self._entanglement_succeed()
             return True
 

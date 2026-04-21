@@ -137,27 +137,9 @@ class Timeline:
                 receive_message_counts[(owner_name, receiver_name, msg_class_name, protocol_type_name, msg_type_name)] += 1
             event.process.run()
             self.run_counter += 1
-            if self.run_counter % 10000 == 0:
-                print(
-                    f"[timeline] executed={self.run_counter} now_ps={self.time} queued_events={len(self.events)}",
-                    flush=True,
-                )
 
         self.is_running = False
         time_elapsed = time_ns() - tick
-        print("[timeline] top_activations:", flush=True)
-        for activation, count in activation_counts.most_common(10):
-            print(f"[timeline] activation={activation} count={count}", flush=True)
-        print("[timeline] top_owner_activations:", flush=True)
-        for (owner, activation), count in owner_activation_counts.most_common(10):
-            print(f"[timeline] owner={owner} activation={activation} count={count}", flush=True)
-        print("[timeline] top_receive_messages:", flush=True)
-        for (owner, receiver, msg_class, protocol_type, msg_type), count in receive_message_counts.most_common(20):
-            print(
-                f"[timeline] owner={owner} receiver={receiver} class={msg_class} "
-                f"protocol_type={protocol_type} msg_type={msg_type} count={count}",
-                flush=True,
-            )
         log.logger.info("Timeline end simulation. Execution Time: {}; Scheduled Event: {}; Executed Event: {}".format(
                          self.ns_to_human_time(time_elapsed), self.schedule_counter, self.run_counter))
 
