@@ -122,19 +122,7 @@ class Timeline:
 
             self.time = event.time
             
-            log.logger.debug("Event #{}: process owner={}, activation={}".format(self.run_counter, event.process.owner, event.process.activation))
-            owner_name = getattr(event.process.owner, "name", str(event.process.owner))
-            activation_name = str(event.process.activation)
-            activation_counts[activation_name] += 1
-            owner_activation_counts[(owner_name, activation_name)] += 1
-            if activation_name == "receive_message" and len(event.process.activation_args) >= 2:
-                msg = event.process.activation_args[1]
-                receiver_name = str(getattr(msg, "receiver", None))
-                msg_class_name = type(msg).__name__
-                protocol_type_name = str(getattr(msg, "protocol_type", None))
-                msg_type_obj = getattr(msg, "msg_type", None)
-                msg_type_name = getattr(msg_type_obj, "name", str(msg_type_obj))
-                receive_message_counts[(owner_name, receiver_name, msg_class_name, protocol_type_name, msg_type_name)] += 1
+            log.logger.debug(f"Event #{self.run_counter}: process owner={event.process.owner}, activation={event.process.activation}")
             event.process.run()
             self.run_counter += 1
 
@@ -170,7 +158,7 @@ class Timeline:
         entity = self.entities.pop(name)
         entity.timeline = None
 
-    def get_entity_by_name(self, name: str) -> Optional[T]:
+    def get_entity_by_name(self, name: str) -> T | None:
         return self.entities.get(name, None)
 
     @staticmethod

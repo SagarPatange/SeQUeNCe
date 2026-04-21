@@ -7,9 +7,12 @@ Photons should be routed to a BSM device for entanglement generation, or through
 
 from copy import copy
 from math import inf
-from typing import Any, TYPE_CHECKING, Callable
+from typing import Any, TYPE_CHECKING
+from collections.abc import Callable
 from numpy import exp, array
 from scipy import stats
+
+from ..kernel.quantum_manager import QuantumManager
 
 if TYPE_CHECKING:
     from ..entanglement_management.entanglement_protocol import EntanglementProtocol
@@ -20,7 +23,7 @@ from ..kernel.entity import Entity
 from ..kernel.event import Event
 from ..kernel.process import Process
 from ..utils.encoding import single_atom, single_heralded
-from ..constants import EPSILON
+from ..constants import EPSILON, BELL_DIAGONAL_STATE_FORMALISM
 from ..utils import log
 
 
@@ -62,6 +65,14 @@ class MemoryArray(Entity):
         Entity.__init__(self, name, timeline)
         self.memories = []
         self.memory_name_to_index = {}
+
+        if decoherence_errors is not None:
+            assert QuantumManager.get_active_formalism() == BELL_DIAGONAL_STATE_FORMALISM, \
+                "Decoherence errors can only be set when formalism is Bell Diagonal"
+
+        # Set the default pauli errors if BDS formalism
+        if QuantumManager.get_active_formalism() == BELL_DIAGONAL_STATE_FORMALISM and decoherence_errors is None:
+            decoherence_errors = [1/3, 1/3, 1/3]
 
         for i in range(num_memories):
             memory_name = self.name + f"[{i}]"
@@ -273,7 +284,7 @@ class Memory(Entity):
             self.generation_time = self.timeline.now()
             self.last_update_time = self.timeline.now()
         else:
-            raise ValueError("Invalid protocol type {} specified for meomory.exite()".format(protocol))
+            raise ValueError(f"Invalid protocol type {protocol} specified for meomory.exite()")
 
         photon.timeline = None  # facilitate cross-process exchange of photons
         photon.is_null = True
@@ -888,7 +899,7 @@ class MemoryWithRandomCoherenceTime(Memory):
             wavelength (int): wavelength (in nm) of photons emitted by memories.
         """
 
-        super(MemoryWithRandomCoherenceTime, self).__init__(name, timeline, fidelity, frequency, 
+        super().__init__(name, timeline, fidelity, frequency, 
                          efficiency, coherence_time, wavelength)
         
         # coherence time standard deviation in seconds
