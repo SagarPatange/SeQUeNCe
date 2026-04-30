@@ -1856,9 +1856,9 @@ class QuantumManagerTableau(QuantumManager):
                 self.states[key] = committed_state
             return {}
 
-        # Readout-fidelity noise uses deterministic RNG seeded from meas_samp.
+        # Readout-fidelity noise uses the same toggle as gate-noise injection.
         rng = None
-        if self.measurement_fid < 1.0:
+        if inject_gate_error and self.measurement_fid < 1.0:
             rng_seed = int(float(meas_samp) * (2 ** 31 - 1))
             rng = np.random.default_rng(rng_seed)
 
@@ -1883,7 +1883,7 @@ class QuantumManagerTableau(QuantumManager):
                 physical_bit = int(simulator.measure(local_target))
 
                 reported_bit = physical_bit
-                if self.measurement_fid < 1.0 and rng is not None and rng.random() > self.measurement_fid:
+                if inject_gate_error and self.measurement_fid < 1.0 and rng is not None and rng.random() > self.measurement_fid:
                     reported_bit ^= 1
                     self.measurement_error_count += 1
                 results[measured_key] = reported_bit
