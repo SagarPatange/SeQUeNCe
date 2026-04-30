@@ -100,6 +100,7 @@ class Circuit:
         self.size: int = size
         self.gates: list[GATE_INFO_TYPE] = []
         self.measured_qubits: list[int] = []
+        self.measured_x_qubits: list[int] = []
         self._cache: np.ndarray | None = None
 
     def get_unitary_matrix(self) -> np.ndarray:
@@ -169,7 +170,8 @@ class Circuit:
         gates = [{"name": g_name, "indices": indices, "arg": arg}
                  for g_name, indices, arg in self.gates]
         return {"size": self.size, "gates": gates,
-                "measured_qubits": self.measured_qubits}
+                "measured_qubits": self.measured_qubits,
+                "measured_x_qubits": self.measured_x_qubits}
 
     def deserialize(self, json_data: dict):
         self.size = json_data["size"]
@@ -179,6 +181,7 @@ class Circuit:
             arg: float = gate["arg"]
             self.gates.append([name, indices, arg])
         self.measured_qubits = json_data["measured_qubits"]
+        self.measured_x_qubits = json_data.get("measured_x_qubits", [])
         self._cache = None
 
     @validator
@@ -356,3 +359,16 @@ class Circuit:
         """
 
         self.measured_qubits.append(qubit)
+
+    @validator
+    def measure_x(self, qubit: int):
+        """Method to measure a qubit in the X basis.
+
+        Args:
+            qubit (int): the index of qubit in the circuit.
+
+        Returns:
+            None.
+        """
+
+        self.measured_x_qubits.append(qubit)
