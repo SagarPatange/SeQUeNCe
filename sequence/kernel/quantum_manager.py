@@ -1681,6 +1681,7 @@ class QuantumManagerTableau(QuantumManager):
         self.measurement_fid = float(kwargs.get("measurement_fid", 1.0))
         self.initialization_fid = float(kwargs.get("initialization_fidelity", 1.0))
         self.gate_error_channel = str(kwargs.get("gate_error_channel", "pauli")).lower()  # Gate-noise mode: "depolarize" (uniform) or "pauli" (weighted).
+        self.idle_error_channel = str(kwargs.get("idle_error_channel", "pauli")).lower()  # Idle-noise mode: "depolarize" (uniform) or "pauli" (T1/T2-derived asymmetric channel).
         self.pauli_1q_weights = tuple(float(w) for w in kwargs.get("pauli_1q_weights", (1.0, 1.0, 1.0)))  # Relative PAULI_CHANNEL_1 weights in X, Y, Z order.
         raw_pauli_2q_weights = kwargs.get("pauli_2q_weights")
         if raw_pauli_2q_weights is None:
@@ -1996,7 +1997,13 @@ class QuantumManagerTableau(QuantumManager):
             pz = (1.0 + np.exp(-idle_sec / t1_sec) - 2.0 * np.exp(-idle_sec / t2_sec)) / 4.0
             local = key_to_local[key]
             noise_circuit = stim.Circuit()
-            noise_circuit.append("PAULI_CHANNEL_1", [local], [float(px), float(py), float(pz)])
+            if self.idle_error_channel == "depolarize":
+                p_idle = float(px + py + pz)
+                noise_circuit.append("PAULI_CHANNEL_1", [local], [p_idle / 3.0, p_idle / 3.0, p_idle / 3.0])
+            elif self.idle_error_channel == "pauli":
+                noise_circuit.append("PAULI_CHANNEL_1", [local], [float(px), float(py), float(pz)])
+            else:
+                raise ValueError("idle_error_channel must be 'depolarize' or 'pauli'.")
             state_obj.state.do(noise_circuit)
             # sampled_branch = self._sample_pauli_channel_branch(
             #     channel_name="PAULI_CHANNEL_1",
