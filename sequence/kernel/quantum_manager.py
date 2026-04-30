@@ -1687,15 +1687,29 @@ class QuantumManagerTableau(QuantumManager):
             self.pauli_2q_weights = self._derive_default_pauli_2q_weights(self.pauli_1q_weights)  # Default 2q bias inherits the 1q Pauli bias using an 80/20 single-vs-correlated split.
         else:
             self.pauli_2q_weights = tuple(float(w) for w in raw_pauli_2q_weights)
+        if len(self.pauli_1q_weights) != 3:
+            raise ValueError("pauli_1q_weights must have 3 entries for X, Y, Z.")
+        if len(self.pauli_2q_weights) != 15:
+            raise ValueError("pauli_2q_weights must have 15 entries in Stim PAULI_CHANNEL_2 order.")
+        pauli_1q_total = float(sum(self.pauli_1q_weights))
+        if pauli_1q_total <= 0.0:
+            self.pauli_1q_weight_fractions = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0)
+        else:
+            self.pauli_1q_weight_fractions = tuple(float(weight) / pauli_1q_total for weight in self.pauli_1q_weights)
+        pauli_2q_total = float(sum(self.pauli_2q_weights))
+        if pauli_2q_total <= 0.0:
+            self.pauli_2q_weight_fractions = tuple(1.0 / 15.0 for _ in range(15))
+        else:
+            self.pauli_2q_weight_fractions = tuple(float(weight) / pauli_2q_total for weight in self.pauli_2q_weights)
         self.last_idle_time_ps_by_key: dict[int, int] = {}  # Last active simulation time per key.
-        self.idle_error_counts_by_key: dict[int, int] = {}
-        self.gate_1q_error_counts: dict[tuple[str, int, str], int] = {}
-        self.gate_1q_attempt_counts: dict[tuple[str, int], int] = {}
-        self.gate_2q_error_counts: dict[tuple[str, int, int, str], int] = {}
-        self.gate_2q_attempt_counts: dict[tuple[str, int, int], int] = {}
-        self.measurement_attempt_counts_by_key: dict[int, int] = {}
-        self.measurement_flip_counts_by_key: dict[int, int] = {}
-        self.initialization_flip_counts_by_key: dict[int, int] = {}
+        # self.idle_error_counts_by_key: dict[int, int] = {}
+        # self.gate_1q_error_counts: dict[tuple[str, int, str], int] = {}
+        # self.gate_1q_attempt_counts: dict[tuple[str, int], int] = {}
+        # self.gate_2q_error_counts: dict[tuple[str, int, int, str], int] = {}
+        # self.gate_2q_attempt_counts: dict[tuple[str, int, int], int] = {}
+        # self.measurement_attempt_counts_by_key: dict[int, int] = {}
+        # self.measurement_flip_counts_by_key: dict[int, int] = {}
+        # self.initialization_flip_counts_by_key: dict[int, int] = {}
 
     def new(self, state: Optional[Union[TableauState, Tableau, TableauSimulator, stim.Circuit]] = None) -> int:
         """Create and register a new tableau-backed state key.
@@ -1776,6 +1790,7 @@ class QuantumManagerTableau(QuantumManager):
         measured_qubits: list[int] = []
         saw_measurement = False
         supported_names = {"H", "X", "Y", "Z", "S", "S_DAG", "CX", "CZ", "SWAP", "M", "MX", "MY"}
+        instruction_payloads: list[tuple[str, list[int]]] = []
 
         for instruction in circuit:
             name = instruction.name
@@ -1789,10 +1804,9 @@ class QuantumManagerTableau(QuantumManager):
             if name in {"M", "MX", "MY"}:
                 saw_measurement = True
                 measured_qubits.extend(targets)
-                continue
-
-            if saw_measurement:
+            elif saw_measurement:
                 raise ValueError("Tableau manager only supports terminal measurements.")
+            instruction_payloads.append((name, targets))
 
         # Prepare validated inputs, merged/shared topology, and key index mapping.
         meas_samp, state_obj, key_to_local = self._prepare_circuit(len(keys), measured_qubits, keys, meas_samp)
@@ -1802,21 +1816,31 @@ class QuantumManagerTableau(QuantumManager):
         base_simulator = state_obj.state
         simulator = base_simulator.copy() if hasattr(base_simulator, "copy") else base_simulator
 
-        # Apply ideal gates, then configured gate-noise channel.
-        for instruction in circuit:
-            name = instruction.name
-            targets = [int(target.value) for target in instruction.targets_copy()]
+        # Fast path: when gate-noise injection is disabled, batch all non-measurement
+        # gates into one Stim circuit and execute it in a single simulator call.
+        if not inject_gate_error:
+            ideal_circuit = stim.Circuit()
+            for name, targets in instruction_payloads:
+                if name in {"M", "MX", "MY"}:
+                    continue
+                for elementary_targets in self._iter_elementary_gate_targets(name, targets):
+                    local_targets = [key_to_local[keys[target]] for target in elementary_targets]
+                    ideal_circuit.append(name, local_targets)
+            if len(ideal_circuit) > 0:
+                simulator.do(ideal_circuit)
+        else:
+            # Slow path: keep per-gate application when noise injection is enabled so
+            # each ideal gate can be followed immediately by its noise channel.
+            for name, targets in instruction_payloads:
+                if name in {"M", "MX", "MY"}:
+                    continue
 
-            if name in {"M", "MX", "MY"}:
-                continue
-
-            for elementary_targets in self._iter_elementary_gate_targets(name, targets):
-                circuit_keys = [keys[target] for target in elementary_targets]
-                local_targets = [key_to_local[key] for key in circuit_keys]
-                local_circuit = stim.Circuit()
-                local_circuit.append(name, local_targets)
-                simulator.do(local_circuit)
-                if inject_gate_error:
+                for elementary_targets in self._iter_elementary_gate_targets(name, targets):
+                    circuit_keys = [keys[target] for target in elementary_targets]
+                    local_targets = [key_to_local[key] for key in circuit_keys]
+                    local_circuit = stim.Circuit()
+                    local_circuit.append(name, local_targets)
+                    simulator.do(local_circuit)
                     self._apply_gate_error(simulator, name, local_targets, circuit_keys)
 
         # No measurements: commit a fresh shared state object for all keys.
@@ -1835,16 +1859,14 @@ class QuantumManagerTableau(QuantumManager):
         # Measure each requested key, report (possibly flipped) bit, and split measured states.
         results: dict[int, int] = {}
         measured_keys: list[int] = []
-        for instruction in circuit:
-            name = instruction.name
+        for name, targets in instruction_payloads:
             if name not in {"M", "MX", "MY"}:
                 continue
 
-            targets = [int(target.value) for target in instruction.targets_copy()]
             for target in targets:
                 measured_key = keys[target]
                 local_target = key_to_local[measured_key]
-                self.measurement_attempt_counts_by_key[measured_key] = self.measurement_attempt_counts_by_key.get(measured_key, 0) + 1
+                # self.measurement_attempt_counts_by_key[measured_key] = self.measurement_attempt_counts_by_key.get(measured_key, 0) + 1
 
                 if name == "MX":
                     simulator.h(local_target)
@@ -1857,7 +1879,7 @@ class QuantumManagerTableau(QuantumManager):
                 reported_bit = physical_bit
                 if self.measurement_fid < 1.0 and rng is not None and rng.random() > self.measurement_fid:
                     reported_bit ^= 1
-                    self.measurement_flip_counts_by_key[measured_key] = self.measurement_flip_counts_by_key.get(measured_key, 0) + 1
+                    # self.measurement_flip_counts_by_key[measured_key] = self.measurement_flip_counts_by_key.get(measured_key, 0) + 1
                 results[measured_key] = reported_bit
                 measured_keys.append(measured_key)
 
@@ -1951,6 +1973,11 @@ class QuantumManagerTableau(QuantumManager):
         Returns:
             None.
         """
+        if t1_sec >= 1e9 and t2_sec >= 1e9:
+            for key in keys:
+                self.last_idle_time_ps_by_key[key] = now_ps
+            return
+
         _, state_obj, key_to_local = self._prepare_circuit(len(keys), [], keys, 0.5)
         for key in keys:
             last_ps = self.last_idle_time_ps_by_key.get(key, now_ps)
@@ -1962,39 +1989,47 @@ class QuantumManagerTableau(QuantumManager):
             px = py = (1.0 - np.exp(-idle_sec / t1_sec)) / 4.0
             pz = (1.0 + np.exp(-idle_sec / t1_sec) - 2.0 * np.exp(-idle_sec / t2_sec)) / 4.0
             local = key_to_local[key]
-            sampled_branch = self._sample_pauli_channel_branch(
-                channel_name="PAULI_CHANNEL_1",
-                probs=[float(px), float(py), float(pz)],
-                targets=[local],
-                source="idle",
-            )
-            if sampled_branch == "X":
-                state_obj.state.x(local)
-            elif sampled_branch == "Y":
-                state_obj.state.y(local)
-            elif sampled_branch == "Z":
-                state_obj.state.z(local)
-            if sampled_branch != "I":
-                self.idle_error_counts_by_key[key] = self.idle_error_counts_by_key.get(key, 0) + 1
-            log.logger.info(
-                f"pauli_channel_apply source=idle channel=PAULI_CHANNEL_1 "
-                f"time_ps={now_ps} key={key} target={local} branch={sampled_branch} "
-                f"inserted_error={int(sampled_branch != 'I')} "
-                f"px={float(px):.6e} py={float(py):.6e} pz={float(pz):.6e}"
-            )
+            noise_circuit = stim.Circuit()
+            noise_circuit.append("PAULI_CHANNEL_1", [local], [float(px), float(py), float(pz)])
+            state_obj.state.do(noise_circuit)
+            # sampled_branch = self._sample_pauli_channel_branch(
+            #     channel_name="PAULI_CHANNEL_1",
+            #     probs=[float(px), float(py), float(pz)],
+            #     targets=[local],
+            #     source="idle",
+            # )
+            # if sampled_branch == "X":
+            #     state_obj.state.x(local)
+            # elif sampled_branch == "Y":
+            #     state_obj.state.y(local)
+            # elif sampled_branch == "Z":
+            #     state_obj.state.z(local)
+            # if sampled_branch != "I":
+            #     self.idle_error_counts_by_key[key] = self.idle_error_counts_by_key.get(key, 0) + 1
+            # log.logger.info(
+            #     f"pauli_channel_apply source=idle channel=PAULI_CHANNEL_1 "
+            #     f"time_ps={now_ps} key={key} target={local} branch={sampled_branch} "
+            #     f"inserted_error={int(sampled_branch != 'I')} "
+            #     f"px={float(px):.6e} py={float(py):.6e} pz={float(pz):.6e}"
+            # )
 
         for key in state_obj.keys:
             self.last_idle_time_ps_by_key[key] = now_ps
     
-    def set_to_zero(self, key: int) -> None:
-        """Reset a single qubit to the |0⟩ computational basis state.
+    def set_to_zero(self, key: int | list[int]) -> None:
+        """Reset one or more qubits to the |0⟩ computational basis state.
 
         Args:
-            key (int): State key of the qubit to reset.
+            key (int | list[int]): State key or keys of the qubits to reset.
 
         Returns:
             None.
         """
+        if isinstance(key, list):
+            for single_key in key:
+                self.set_to_zero(single_key)
+            return
+
         seed = self._next_seed()
         simulator = TableauSimulator(seed=seed)
         simulator.set_num_qubits(1)
@@ -2003,9 +2038,8 @@ class QuantumManagerTableau(QuantumManager):
             rng = np.random.default_rng(seed)
             if rng.random() < flip_probability:
                 simulator.x(0)
-                self.initialization_flip_counts_by_key[key] = self.initialization_flip_counts_by_key.get(key, 0) + 1
+                # self.initialization_flip_counts_by_key[key] = self.initialization_flip_counts_by_key.get(key, 0) + 1
         self.states[key] = TableauState(state=simulator, keys=[key], seed=seed)
-        self.last_idle_time_ps_by_key[key] = 0
 
     def set_to_one(self, key: int) -> None:
         """Reset a single qubit to the |1⟩ computational basis state.
@@ -2025,7 +2059,7 @@ class QuantumManagerTableau(QuantumManager):
             rng = np.random.default_rng(seed)
             if rng.random() < flip_probability:
                 sim.x(0)
-                self.initialization_flip_counts_by_key[key] = self.initialization_flip_counts_by_key.get(key, 0) + 1
+                # self.initialization_flip_counts_by_key[key] = self.initialization_flip_counts_by_key.get(key, 0) + 1
         self.states[key] = TableauState(state=sim, keys=[key], seed=seed)
         self.last_idle_time_ps_by_key[key] = 0
 
@@ -2043,14 +2077,15 @@ class QuantumManagerTableau(QuantumManager):
         Returns:
             None.
         """
-        self.idle_error_counts_by_key.clear()
-        self.gate_1q_error_counts.clear()
-        self.gate_1q_attempt_counts.clear()
-        self.gate_2q_error_counts.clear()
-        self.gate_2q_attempt_counts.clear()
-        self.measurement_attempt_counts_by_key.clear()
-        self.measurement_flip_counts_by_key.clear()
-        self.initialization_flip_counts_by_key.clear()
+        # self.idle_error_counts_by_key.clear()
+        # self.gate_1q_error_counts.clear()
+        # self.gate_1q_attempt_counts.clear()
+        # self.gate_2q_error_counts.clear()
+        # self.gate_2q_attempt_counts.clear()
+        # self.measurement_attempt_counts_by_key.clear()
+        # self.measurement_flip_counts_by_key.clear()
+        # self.initialization_flip_counts_by_key.clear()
+        pass
 
     def _next_seed(self) -> Optional[int]:
         """Return next seed value or None if unseeded."""
@@ -2145,11 +2180,11 @@ class QuantumManagerTableau(QuantumManager):
             sampled_index = int(self.branch_rng.choice(len(branch_labels), p=normalized_probs))
             sampled_branch = branch_labels[sampled_index]
 
-        log.logger.info(
-            f"pauli_channel_sample source={source} channel={channel_name} "
-            f"targets={targets} branch={sampled_branch} "
-            f"inserted_error={int(sampled_branch != identity_label)}"
-        )
+        # log.logger.info(
+        #     f"pauli_channel_sample source={source} channel={channel_name} "
+        #     f"targets={targets} branch={sampled_branch} "
+        #     f"inserted_error={int(sampled_branch != identity_label)}"
+        # )
         return sampled_branch
 
     def _initialize_tableau_state(self, initializer: Union[TableauState, Tableau, TableauSimulator, np.ndarray, list[Union[int, float, complex]], tuple[Union[int, float, complex]]], keys: list[int]) -> TableauState:
@@ -2202,41 +2237,20 @@ class QuantumManagerTableau(QuantumManager):
 
         if name in {"H", "X", "Y", "Z", "S", "S_DAG"}:
             attempt_key = (name, int(circuit_keys[0]))
-            self.gate_1q_attempt_counts[attempt_key] = self.gate_1q_attempt_counts.get(attempt_key, 0) + 1
+            # self.gate_1q_attempt_counts[attempt_key] = self.gate_1q_attempt_counts.get(attempt_key, 0) + 1
             p_error = max(0.0, min(1.0, 1.5 * (1.0 - self.gate_fid)))
             if p_error <= 0.0:
                 return
 
+            noise_circuit = stim.Circuit()
             if self.gate_error_channel == "depolarize":
-                probs = [p_error / 3.0] * 3
+                noise_circuit.append("DEPOLARIZE1", [targets[0]], p_error)
             elif self.gate_error_channel in {"pauli", "paulierror", "pauli_channel"}:
-                if len(self.pauli_1q_weights) != 3:
-                    raise ValueError("pauli_1q_weights must have 3 entries for X, Y, Z.")
-                total = sum(self.pauli_1q_weights)
-                probs = [p_error / 3.0] * 3 if total <= 0.0 else [p_error * (w / total) for w in self.pauli_1q_weights]
+                probs = [p_error * weight for weight in self.pauli_1q_weight_fractions]
+                noise_circuit.append("PAULI_CHANNEL_1", [targets[0]], probs)
             else:
                 raise ValueError("gate_error_channel must be 'depolarize' or 'pauli'.")
-
-            sampled_branch = self._sample_pauli_channel_branch(
-                channel_name="PAULI_CHANNEL_1",
-                probs=probs,
-                targets=targets,
-                source=f"gate:{name}",
-            )
-            if sampled_branch == "X":
-                simulator.x(targets[0])
-            elif sampled_branch == "Y":
-                simulator.y(targets[0])
-            elif sampled_branch == "Z":
-                simulator.z(targets[0])
-            if sampled_branch != "I":
-                stat_key = (name, int(circuit_keys[0]), sampled_branch)
-                self.gate_1q_error_counts[stat_key] = self.gate_1q_error_counts.get(stat_key, 0) + 1
-            log.logger.info(
-                f"pauli_channel_apply source=gate:{name} channel=PAULI_CHANNEL_1 "
-                f"targets={targets} branch={sampled_branch} "
-                f"inserted_error={int(sampled_branch != 'I')}"
-            )
+            simulator.do(noise_circuit)
             return
 
         if name in {"CX", "CZ", "SWAP"}:
@@ -2244,39 +2258,17 @@ class QuantumManagerTableau(QuantumManager):
             if p_error <= 0.0:
                 return
             attempt_key = (name, int(circuit_keys[0]), int(circuit_keys[1]))
-            self.gate_2q_attempt_counts[attempt_key] = self.gate_2q_attempt_counts.get(attempt_key, 0) + 1
+            # self.gate_2q_attempt_counts[attempt_key] = self.gate_2q_attempt_counts.get(attempt_key, 0) + 1
 
+            noise_circuit = stim.Circuit()
             if self.gate_error_channel == "depolarize":
-                probs = [p_error / 15.0] * 15
+                noise_circuit.append("DEPOLARIZE2", targets, p_error)
             elif self.gate_error_channel in {"pauli", "paulierror", "pauli_channel"}:
-                if len(self.pauli_2q_weights) != 15:
-                    raise ValueError("pauli_2q_weights must have 15 entries in Stim PAULI_CHANNEL_2 order.")
-                total = sum(self.pauli_2q_weights)
-                probs = [p_error / 15.0] * 15 if total <= 0.0 else [p_error * (w / total) for w in self.pauli_2q_weights]
+                probs = [p_error * weight for weight in self.pauli_2q_weight_fractions]
+                noise_circuit.append("PAULI_CHANNEL_2", targets, probs)
             else:
                 raise ValueError("gate_error_channel must be 'depolarize' or 'pauli'.")
-
-            sampled_branch = self._sample_pauli_channel_branch(
-                channel_name="PAULI_CHANNEL_2",
-                probs=probs,
-                targets=targets,
-                source=f"gate:{name}",
-            )
-            for pauli, target in zip(sampled_branch, targets):
-                if pauli == "X":
-                    simulator.x(target)
-                elif pauli == "Y":
-                    simulator.y(target)
-                elif pauli == "Z":
-                    simulator.z(target)
-            if sampled_branch != "II":
-                stat_key = (name, int(circuit_keys[0]), int(circuit_keys[1]), sampled_branch)
-                self.gate_2q_error_counts[stat_key] = self.gate_2q_error_counts.get(stat_key, 0) + 1
-            log.logger.info(
-                f"pauli_channel_apply source=gate:{name} channel=PAULI_CHANNEL_2 "
-                f"targets={targets} branch={sampled_branch} "
-                f"inserted_error={int(sampled_branch != 'II')}"
-            )
+            simulator.do(noise_circuit)
             return
 
     def _to_stim_circuit(self, circuit: Union[stim.Circuit, Circuit]) -> stim.Circuit:
@@ -2361,7 +2353,7 @@ class QuantumManagerTableau(QuantumManager):
             qstate = self.states[key]
             if not isinstance(qstate, TableauState):
                 raise ValueError(f"Expected TableauState for key {key}, got {type(qstate)}")
-            if len(qstate.current_tableau()) != len(qstate.keys):
+            if qstate.state.num_qubits != len(qstate.keys):
                 raise RuntimeError(f"Tableau/key mismatch for state keys: {qstate.keys}")
             if id(qstate) not in seen_state_ids:
                 seen_state_ids.add(id(qstate))

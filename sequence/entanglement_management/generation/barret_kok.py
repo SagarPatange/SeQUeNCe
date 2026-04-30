@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 from ...resource_management.memory_manager import MemoryInfo
 from ...constants import BARRET_KOK
 from .generation_base import EntanglementGenerationA, EntanglementGenerationB, QuantumCircuitMixin
-from ...components.circuit import Circuit
 from ...kernel.event import Event
 from ...kernel.process import Process
 from ...utils import log
@@ -150,7 +149,7 @@ class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
 
             # schedule emit
             process = Process(self, "emit_event", [])
-            event = Event(emit_time, process)
+            event = Event(emit_time, process, self.owner.timeline.schedule_counter)
             self.owner.timeline.schedule(event)
             self.scheduled_events.append(event)
 
@@ -189,7 +188,7 @@ class BarretKokA(EntanglementGenerationA, QuantumCircuitMixin):
                 f"Invalid eg emit times {emit_time} {msg.emit_time} {self.owner.timeline.now()}"
 
             process = Process(self, "emit_event", [])
-            event = Event(msg.emit_time, process)
+            event = Event(msg.emit_time, process, self.owner.timeline.schedule_counter)
             self.owner.timeline.schedule(event)
             self.scheduled_events.append(event)
 
