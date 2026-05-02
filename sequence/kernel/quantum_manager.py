@@ -1746,12 +1746,7 @@ class QuantumManagerTableau(QuantumManager):
             seed = self._next_seed()
             simulator = TableauSimulator(seed=seed)
             simulator.set_num_qubits(1)
-            if self.initialization_fid < 1.0:
-                flip_probability = max(0.0, min(1.0, 1.0 - self.initialization_fid))
-                rng = np.random.default_rng(seed)
-                if rng.random() < flip_probability:
-                    simulator.x(0)
-                    self.initialization_flip_counts_by_key[key] = self.initialization_flip_counts_by_key.get(key, 0) + 1
+            self._apply_initialization_fidelity(simulator, [0])
             self.states[key] = TableauState(state=simulator, keys=[key], seed=seed)
         else:
             self.states[key] = self._initialize_tableau_state(state, [key])
@@ -2051,12 +2046,7 @@ class QuantumManagerTableau(QuantumManager):
         seed = self._next_seed()
         simulator = TableauSimulator(seed=seed)
         simulator.set_num_qubits(1)
-        if self.initialization_fid < 1.0:
-            flip_probability = max(0.0, min(1.0, 1.0 - self.initialization_fid))
-            rng = np.random.default_rng(seed)
-            if rng.random() < flip_probability:
-                simulator.x(0)
-                # self.initialization_flip_counts_by_key[key] = self.initialization_flip_counts_by_key.get(key, 0) + 1
+        self._apply_initialization_fidelity(simulator, [0])
         self.states[key] = TableauState(state=simulator, keys=[key], seed=seed)
 
     def set_to_one(self, key: int) -> None:
@@ -2072,12 +2062,7 @@ class QuantumManagerTableau(QuantumManager):
         sim = TableauSimulator(seed=seed)
         sim.set_num_qubits(1)
         sim.x(0)
-        if self.initialization_fid < 1.0:
-            flip_probability = max(0.0, min(1.0, 1.0 - self.initialization_fid))
-            rng = np.random.default_rng(seed)
-            if rng.random() < flip_probability:
-                sim.x(0)
-                # self.initialization_flip_counts_by_key[key] = self.initialization_flip_counts_by_key.get(key, 0) + 1
+        self._apply_initialization_fidelity(sim, [0])
         self.states[key] = TableauState(state=sim, keys=[key], seed=seed)
         self.last_idle_time_ps_by_key[key] = 0
 
@@ -2129,6 +2114,25 @@ class QuantumManagerTableau(QuantumManager):
         seed = int(self.base_seed + self._seed_counter)
         self._seed_counter += 1
         return seed
+
+    def _apply_initialization_fidelity(self, simulator: TableauSimulator, targets: list[int]) -> None:
+        """Apply initialization depolarizing noise to freshly prepared qubits.
+
+        Args:
+            simulator: Active simulator to mutate.
+            targets: Simulator-local qubit indices that were just initialized.
+
+        Returns:
+            None.
+        """
+        p_error = max(0.0, min(1.0, 1.5 * (1.0 - self.initialization_fid)))
+        if p_error <= 0.0:
+            return
+
+        noise_circuit = stim.Circuit()
+        for target in targets:
+            noise_circuit.append("DEPOLARIZE1", [target], p_error)
+        simulator.do(noise_circuit)
 
     def _derive_default_pauli_2q_weights(self, pauli_1q_weights: tuple[float, float, float], single_only_fraction: float = 0.8) -> tuple[float, ...]:
         """Derive default 2q Pauli weights from the configured 1q Pauli bias.
