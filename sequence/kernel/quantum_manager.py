@@ -1660,6 +1660,8 @@ class QuantumManagerTableau(QuantumManager):
             gate_fid (float): Single-qubit gate fidelity in [0, 1].
             two_qubit_gate_fid (float): Two-qubit gate fidelity in [0, 1].
             measurement_fid (float): Measurement fidelity in [0, 1].
+            track_error_statistics (bool): Whether to accumulate per-run gate
+                and measurement counters.
             **kwargs: Extra keyword arguments accepted for compatibility.
 
         Returns:
@@ -1680,6 +1682,7 @@ class QuantumManagerTableau(QuantumManager):
         self.two_qubit_gate_fid = float(kwargs.get("two_qubit_gate_fid", 1.0))
         self.measurement_fid = float(kwargs.get("measurement_fid", 1.0))
         self.initialization_fid = float(kwargs.get("initialization_fidelity", 1.0))
+        self.track_error_statistics = bool(kwargs.get("track_error_statistics", False))
         self.gate_error_channel = str(kwargs.get("gate_error_channel", "pauli")).lower()  # Gate-noise mode: "depolarize" (uniform) or "pauli" (weighted).
         self.idle_error_channel = str(kwargs.get("idle_error_channel", "pauli")).lower()  # Idle-noise mode: "depolarize" (uniform) or "pauli" (T1/T2-derived asymmetric channel).
         self.pauli_1q_weights = tuple(float(w) for w in kwargs.get("pauli_1q_weights", (1.0, 1.0, 1.0)))  # Relative PAULI_CHANNEL_1 weights in X, Y, Z order.
@@ -1873,7 +1876,8 @@ class QuantumManagerTableau(QuantumManager):
             for target in targets:
                 measured_key = keys[target]
                 local_target = key_to_local[measured_key]
-                self.measurement_count += 1
+                if self.track_error_statistics:
+                    self.measurement_count += 1
 
                 if name == "MX":
                     simulator.h(local_target)
@@ -1886,7 +1890,8 @@ class QuantumManagerTableau(QuantumManager):
                 reported_bit = physical_bit
                 if inject_gate_error and self.measurement_fid < 1.0 and rng is not None and rng.random() > self.measurement_fid:
                     reported_bit ^= 1
-                    self.measurement_error_count += 1
+                    if self.track_error_statistics:
+                        self.measurement_error_count += 1
                 results[measured_key] = reported_bit
                 measured_keys.append(measured_key)
 
@@ -2290,7 +2295,8 @@ class QuantumManagerTableau(QuantumManager):
         name = gate_name.upper()
 
         if name in {"H", "X", "Y", "Z", "S", "S_DAG"}:
-            self.gate_1q_count += 1
+            if self.track_error_statistics:
+                self.gate_1q_count += 1
             p_error = max(0.0, min(1.0, 1.5 * (1.0 - self.gate_fid)))
             if p_error <= 0.0:
                 return
@@ -2301,13 +2307,14 @@ class QuantumManagerTableau(QuantumManager):
             else:
                 raise ValueError("gate_error_channel must be 'depolarize' or 'pauli'.")
             sampled_branch = self._sample_pauli_channel_branch("PAULI_CHANNEL_1", probs, targets, f"gate:{name}")
-            if sampled_branch != "I":
+            if self.track_error_statistics and sampled_branch != "I":
                 self.gate_1q_error_count += 1
             self._apply_sampled_pauli_branch(simulator, targets, sampled_branch)
             return
 
         if name in {"CX", "CZ", "SWAP"}:
-            self.gate_2q_count += 1
+            if self.track_error_statistics:
+                self.gate_2q_count += 1
             p_error = min(1.0, 1.25 * (1.0 - self.two_qubit_gate_fid))
             if p_error <= 0.0:
                 return
@@ -2318,7 +2325,7 @@ class QuantumManagerTableau(QuantumManager):
             else:
                 raise ValueError("gate_error_channel must be 'depolarize' or 'pauli'.")
             sampled_branch = self._sample_pauli_channel_branch("PAULI_CHANNEL_2", probs, targets, f"gate:{name}")
-            if sampled_branch != "II":
+            if self.track_error_statistics and sampled_branch != "II":
                 self.gate_2q_error_count += 1
             self._apply_sampled_pauli_branch(simulator, targets, sampled_branch)
             return
