@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.linalg import fractional_matrix_power
 import math
+import stim
 
 from sequence.kernel.quantum_manager import *
 from sequence.components.circuit import Circuit
@@ -57,6 +58,21 @@ def test_qmanager_remove():
     qm.states[0] = "test_string"
     qm.remove(0)
     assert len(qm.states.keys()) == 0
+
+
+def test_qmanager_tableau_get_circuit_duration_counts_parallel_stim_targets_once():
+    qm = QuantumManagerTableau()
+    circuit = stim.Circuit()
+    circuit.append("H", [0, 1])
+    circuit.append("CX", [0, 1, 2, 3])
+    circuit.append("M", [0, 1])
+
+    expected = (
+        qm.ONE_QUBIT_GATE_TIME_PS
+        + qm.TWO_QUBIT_GATE_TIME_PS
+        + qm.MEASUREMENT_TIME_PS
+    )
+    assert qm.get_circuit_duration(circuit) == expected
 
 
 def test_qmanager_circuit():

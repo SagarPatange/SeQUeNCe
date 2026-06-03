@@ -1944,12 +1944,13 @@ class QuantumManagerTableau(QuantumManager):
                 raise RuntimeError(f"Unsupported non-qubit target in duration estimate: {name}")
             target_count = len(targets_raw)
 
+            # Treat one Stim instruction as one parallel gate layer across its targets.
             if name in {"H", "X", "Y", "Z", "S", "S_DAG"}:
-                duration_ps += target_count * self.ONE_QUBIT_GATE_TIME_PS
+                duration_ps += self.ONE_QUBIT_GATE_TIME_PS
             elif name in {"CX", "CZ", "SWAP"}:
-                duration_ps += (target_count // 2) * self.TWO_QUBIT_GATE_TIME_PS
+                duration_ps += self.TWO_QUBIT_GATE_TIME_PS
             elif name in {"M", "MX", "MY"}:
-                duration_ps += target_count * self.MEASUREMENT_TIME_PS
+                duration_ps += self.MEASUREMENT_TIME_PS
             else:
                 raise RuntimeError(f"Unsupported gate for duration estimate: {name}")
 
